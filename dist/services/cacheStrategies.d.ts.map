@@ -1,0 +1,1 @@
+{"version":3,"file":"cacheStrategies.d.ts","sourceRoot":"","sources":["../../src/services/cacheStrategies.ts"],"names":[],"mappings":"AACA,MAAM,MAAM,aAAa,GAAG,aAAa,GAAG,eAAe,GAAG,wBAAwB,CAAC;AAEvF,qBAAa,YAAY;IACvB,GAAG,CAAC,QAAQ,EAAE,aAAa,EAAE,GAAG,EAAE,MAAM;IAQxC,OAAO,CAAC,UAAU;IAClB,OAAO,CAAC,YAAY;IACpB,OAAO,CAAC,oBAAoB;CAC7B"}

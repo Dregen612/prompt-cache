@@ -1,0 +1,1 @@
+{"version":3,"file":"alerts.d.ts","sourceRoot":"","sources":["../../src/services/alerts.ts"],"names":[],"mappings":"AACA,MAAM,WAAW,WAAW;IAC1B,KAAK,EAAE,MAAM,CAAC;IACd,gBAAgB,EAAE,MAAM,CAAC;CAC1B;AAID,wBAAgB,UAAU,CAAC,MAAM,EAAE,MAAM,EAAE,KAAK,EAAE,MAAM,EAAE,KAAK,EAAE,MAAM,GAAG,IAAI,CAM7E;AAED,wBAAgB,QAAQ,CAAC,MAAM,EAAE,WAAW,GAAG,IAAI,CAElD"}

@@ -1,0 +1,1276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PromptCache — Intelligent LLM Response Caching</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --bg-primary: #030307;
+      --bg-secondary: #0a0a0f;
+      --bg-tertiary: #12121a;
+      --bg-card: rgba(18, 18, 26, 0.8);
+      --accent-primary: #6366f1;
+      --accent-secondary: #8b5cf6;
+      --accent-tertiary: #06b6d4;
+      --accent-glow: rgba(99, 102, 241, 0.4);
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --border-color: rgba(148, 163, 184, 0.1);
+      --border-glow: rgba(99, 102, 241, 0.3);
+      --success: #10b981;
+      --error: #ef4444;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: 'Space Grotesk', sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    .bg-grid {
+      position: fixed;
+      inset: 0;
+      background-image: 
+        linear-gradient(rgba(99, 102, 241, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(99, 102, 241, 0.03) 1px, transparent 1px);
+      background-size: 60px 60px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .bg-glow {
+      position: fixed;
+      width: 800px;
+      height: 800px;
+      border-radius: 50%;
+      filter: blur(150px);
+      opacity: 0.15;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .bg-glow-1 {
+      top: -400px;
+      right: -200px;
+      background: var(--accent-primary);
+    }
+
+    .bg-glow-2 {
+      bottom: -400px;
+      left: -200px;
+      background: var(--accent-secondary);
+    }
+
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      padding: 1rem 2rem;
+      background: rgba(3, 3, 7, 0.8);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .nav-container {
+      max-width: 1400px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-size: 1.5rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--accent-primary), var(--accent-tertiary));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .logo-icon {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.25rem;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 2rem;
+      list-style: none;
+    }
+
+    .nav-links a {
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 0.95rem;
+      font-weight: 500;
+      transition: color 0.3s ease;
+    }
+
+    .nav-links a:hover {
+      color: var(--text-primary);
+    }
+
+    .nav-cta {
+      padding: 0.625rem 1.25rem;
+      background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+      border: none;
+      border-radius: 8px;
+      color: white;
+      font-family: inherit;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      text-decoration: none;
+    }
+
+    .nav-cta:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 40px var(--accent-glow);
+    }
+
+    .hero {
+      position: relative;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8rem 2rem 4rem;
+      z-index: 1;
+    }
+
+    .hero-content {
+      max-width: 900px;
+      text-align: center;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 100px;
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      margin-bottom: 2rem;
+      backdrop-filter: blur(10px);
+    }
+
+    .badge-dot {
+      width: 8px;
+      height: 8px;
+      background: var(--success);
+      border-radius: 50%;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .hero h1 {
+      font-size: clamp(2.5rem, 6vw, 4.5rem);
+      font-weight: 700;
+      line-height: 1.1;
+      margin-bottom: 1.5rem;
+      letter-spacing: -0.02em;
+    }
+
+    .hero h1 .gradient {
+      background: linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-secondary) 50%, var(--accent-tertiary) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero p {
+      font-size: 1.25rem;
+      color: var(--text-secondary);
+      max-width: 640px;
+      margin: 0 auto 2.5rem;
+      line-height: 1.7;
+    }
+
+    .hero-buttons {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      padding: 1rem 2rem;
+      border-radius: 12px;
+      font-family: inherit;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+      border: none;
+      color: white;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 20px 60px var(--accent-glow);
+    }
+
+    .btn-secondary {
+      background: transparent;
+      border: 1px solid var(--border-color);
+      color: var(--text-primary);
+    }
+
+    .btn-secondary:hover {
+      border-color: var(--accent-primary);
+      background: var(--bg-card);
+    }
+
+    .stats-bar {
+      display: flex;
+      justify-content: center;
+      gap: 4rem;
+      padding: 3rem 2rem;
+      border-top: 1px solid var(--border-color);
+      border-bottom: 1px solid var(--border-color);
+      background: var(--bg-secondary);
+      margin-top: 4rem;
+    }
+
+    .stat {
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 2.5rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--accent-primary), var(--accent-tertiary));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .stat-label {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      margin-top: 0.25rem;
+    }
+
+    .features {
+      padding: 8rem 2rem;
+      max-width: 1400px;
+      margin: 0 auto;
+      z-index: 1;
+      position: relative;
+    }
+
+    .section-header {
+      text-align: center;
+      margin-bottom: 4rem;
+    }
+
+    .section-header h2 {
+      font-size: clamp(2rem, 4vw, 3rem);
+      font-weight: 700;
+      margin-bottom: 1rem;
+    }
+
+    .section-header p {
+      color: var(--text-secondary);
+      font-size: 1.1rem;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 1.5rem;
+    }
+
+    .feature-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 2rem;
+      transition: all 0.4s ease;
+      backdrop-filter: blur(10px);
+    }
+
+    .feature-card:hover {
+      transform: translateY(-8px);
+      border-color: var(--border-glow);
+      box-shadow: 0 20px 60px rgba(99, 102, 241, 0.1);
+    }
+
+    .feature-icon {
+      width: 56px;
+      height: 56px;
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(139, 92, 246, 0.2));
+      border-radius: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .feature-card h3 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+    }
+
+    .feature-card p {
+      color: var(--text-secondary);
+      font-size: 0.95rem;
+      line-height: 1.7;
+    }
+
+    .how-it-works {
+      padding: 8rem 2rem;
+      background: var(--bg-secondary);
+      z-index: 1;
+      position: relative;
+    }
+
+    .steps {
+      max-width: 900px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 3rem;
+    }
+
+    .step {
+      display: flex;
+      gap: 2rem;
+      align-items: flex-start;
+    }
+
+    .step-number {
+      width: 48px;
+      height: 48px;
+      min-width: 48px;
+      background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 1.25rem;
+    }
+
+    .step-content h3 {
+      font-size: 1.35rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+
+    .step-content p {
+      color: var(--text-secondary);
+      margin-bottom: 1rem;
+    }
+
+    .code-block {
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1.25rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      overflow-x: auto;
+    }
+
+    .code-block .comment { color: #6b7280; }
+    .code-block .string { color: #10b981; }
+    .code-block .keyword { color: #8b5cf6; }
+    .code-block .function { color: #06b6d4; }
+
+    .api-section {
+      padding: 8rem 2rem;
+      max-width: 1200px;
+      margin: 0 auto;
+      z-index: 1;
+      position: relative;
+    }
+
+    .api-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 3rem;
+      align-items: start;
+    }
+
+    @media (max-width: 900px) {
+      .api-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .api-endpoints h3 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin-bottom: 1.5rem;
+    }
+
+    .endpoint {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1rem;
+      backdrop-filter: blur(10px);
+    }
+
+    .endpoint-header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .method {
+      padding: 0.35rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .method-get { background: rgba(16, 185, 129, 0.2); color: #10b981; }
+    .method-post { background: rgba(99, 102, 241, 0.2); color: #6366f1; }
+    .method-delete { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+
+    .endpoint-path {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+    }
+
+    .endpoint p {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+    }
+
+    .api-key-section {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 2rem;
+      backdrop-filter: blur(10px);
+    }
+
+    .api-key-section h3 {
+      font-size: 1.35rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+
+    .api-key-section > p {
+      color: var(--text-secondary);
+      margin-bottom: 1.5rem;
+    }
+
+    .api-key-display {
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .api-key-display code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      color: var(--accent-tertiary);
+      flex: 1;
+      word-break: break-all;
+    }
+
+    .copy-btn {
+      padding: 0.5rem 1rem;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      color: var(--text-secondary);
+      font-family: inherit;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      white-space: nowrap;
+    }
+
+    .copy-btn:hover {
+      border-color: var(--accent-primary);
+      color: var(--text-primary);
+    }
+
+    .copy-btn.copied {
+      border-color: var(--success);
+      color: var(--success);
+    }
+
+    .api-note {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .demo-section {
+      padding: 8rem 2rem;
+      background: var(--bg-secondary);
+      z-index: 1;
+      position: relative;
+    }
+
+    .demo-container {
+      max-width: 1000px;
+      margin: 0 auto;
+    }
+
+    .demo-box {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      overflow: hidden;
+      backdrop-filter: blur(10px);
+    }
+
+    .demo-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 1rem 1.5rem;
+      background: var(--bg-tertiary);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .demo-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+
+    .demo-dot.red { background: #ef4444; }
+    .demo-dot.yellow { background: #f59e0b; }
+    .demo-dot.green { background: #10b981; }
+
+    .demo-content {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      min-height: 400px;
+    }
+
+    @media (max-width: 768px) {
+      .demo-content {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .demo-input {
+      padding: 1.5rem;
+      border-right: 1px solid var(--border-color);
+    }
+
+    .demo-input label {
+      display: block;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-bottom: 0.5rem;
+      font-weight: 500;
+    }
+
+    .demo-input textarea {
+      width: 100%;
+      height: 200px;
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 1rem;
+      color: var(--text-primary);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      resize: none;
+      line-height: 1.6;
+    }
+
+    .demo-input textarea:focus {
+      outline: none;
+      border-color: var(--accent-primary);
+    }
+
+    .demo-output {
+      padding: 1.5rem;
+      background: var(--bg-primary);
+    }
+
+    .demo-output label {
+      display: block;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-bottom: 0.5rem;
+      font-weight: 500;
+    }
+
+    .demo-result {
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 1rem;
+      height: 200px;
+      overflow-y: auto;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+
+    .cached-tag {
+      color: var(--success);
+      font-weight: 600;
+    }
+
+    .miss-tag {
+      color: var(--text-muted);
+    }
+
+    .cta-section {
+      padding: 8rem 2rem;
+      text-align: center;
+      z-index: 1;
+      position: relative;
+    }
+
+    .cta-section h2 {
+      font-size: clamp(2rem, 4vw, 3rem);
+      font-weight: 700;
+      margin-bottom: 1rem;
+    }
+
+    .cta-section p {
+      color: var(--text-secondary);
+      font-size: 1.1rem;
+      margin-bottom: 2rem;
+      max-width: 500px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    footer {
+      padding: 3rem 2rem;
+      border-top: 1px solid var(--border-color);
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      z-index: 1;
+      position: relative;
+    }
+
+    footer a {
+      color: var(--text-secondary);
+      text-decoration: none;
+    }
+
+    footer a:hover {
+      color: var(--accent-primary);
+    }
+
+    @keyframes fadeInUp {
+      from {
+        opacity: 0;
+        transform: translateY(30px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .animate {
+      animation: fadeInUp 0.8s ease forwards;
+    }
+
+    .delay-1 { animation-delay: 0.1s; }
+    .delay-2 { animation-delay: 0.2s; }
+    .delay-3 { animation-delay: 0.3s; }
+    .delay-4 { animation-delay: 0.4s; }
+
+    @media (max-width: 768px) {
+      .nav-links {
+        display: none;
+      }
+
+      .stats-bar {
+        flex-direction: column;
+        gap: 2rem;
+      }
+
+      .hero-buttons {
+        flex-direction: column;
+        align-items: center;
+      }
+
+      .step {
+        flex-direction: column;
+        gap: 1rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-grid"></div>
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+
+  <nav>
+    <div class="nav-container">
+      <div class="logo">
+        <div class="logo-icon">⚡</div>
+        PromptCache
+      </div>
+      <ul class="nav-links">
+        <li><a href="#features">Features</a></li>
+        <li><a href="#how-it-works">How It Works</a></li>
+        <li><a href="#pricing">Pricing</a></li>
+        <li><a href="#analytics">Analytics</a></li>
+        <li><a href="#api">API</a></li>
+        <li><a href="#demo">Demo</a></li>
+      </ul>
+      <a href="#api" class="nav-cta">Get API Key</a>
+    </div>
+  </nav>
+
+  <section class="hero">
+    <div class="hero-content">
+      <div class="badge">
+        <span class="badge-dot"></span>
+        Pay-per-call AI Caching
+      </div>
+      <h1>
+        Stop Paying for<br>
+        <span class="gradient">the Same Answers</span>
+      </h1>
+      <p>
+        Cache your LLM responses and pay only when we serve a cached hit — 
+        less than a tenth of a cent per call. No subscriptions. No credit cards. 
+        Just get an API key and start caching.
+      </p>
+      <div class="hero-buttons">
+        <a href="#how-it-works" class="btn btn-primary">
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="margin-right: 8px;"><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/></svg>
+          See How It Works
+        </a>
+        <a href="#demo" class="btn btn-secondary">Try Free Demo</a>
+      </div>
+      <p style="margin-top: 1.5rem; color: var(--text-muted); font-size: 0.875rem;">
+        💳 Or <a href="#api" style="color: var(--accent-primary);">get an API key</a> — 1,000 free requests/month
+      </p>
+    </div>
+  </section>
+
+  <div class="stats-bar">
+    <div class="stat">
+      <div class="stat-value">90%</div>
+      <div class="stat-label">Cost Reduction</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">&lt;1ms</div>
+      <div class="stat-label">Cache Hit Latency</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">99.9%</div>
+      <div class="stat-label">Uptime SLA</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">∞</div>
+      <div class="stat-label">Scale</div>
+    </div>
+  </div>
+
+  <section class="features" id="features">
+    <div class="section-header">
+      <h2>Why PromptCache?</h2>
+      <p>Cut your LLM costs by up to 90% — no matter which model you use</p>
+    </div>
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon">💰</div>
+        <h3>Pay Per Use</h3>
+        <p>No monthly fees. No subscriptions. Pay only $0.001 (less than a cent) when we serve a cached response. Connect your wallet and start.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🧠</div>
+        <h3>Smart Caching</h3>
+        <p>Our AI understands meaning, not just exact matches. Ask the same question differently? We'll still find the cached answer.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">⚡</div>
+        <h3>Lightning Fast</h3>
+        <p>Cache hits return in under 1 millisecond — faster than calling ChatGPT or any API. Your users won't notice.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🌍</div>
+        <h3>Global Access</h3>
+        <p>No credit card needed. Anyone with a crypto wallet (Coinbase, MetaMask, etc.) can use it. Great for international users.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔄</div>
+        <h3>Auto Expiration</h3>
+        <p>Set how long cached answers last (1 hour, 1 day, whatever you need). Old data auto-deletes. No maintenance needed.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📊</div>
+        <h3>See Your Savings</h3>
+        <p>Real-time dashboard shows hit rate, total saved, and usage. Know exactly what you're paying for.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="how-it-works" id="how-it-works">
+    <div class="section-header">
+      <h2>How It Works</h2>
+      <p>Three lines of code to start saving</p>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+          <h3>Send Your Prompt</h3>
+          <p>Make a GET request with your prompt. We'll hash it and check the cache.</p>
+          <div class="code-block">
+<span class="comment"># Check cache (GET)</span>
+curl <span class="string">"https://api.promptcache.dev/cache"</span> \
+  -H <span class="string">"X-API-Key: your-api-key"</span> \
+  -d <span class="string">"prompt=Your prompt here"</span>
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+          <h3>Cache Hit or Miss</h3>
+          <p>If we've seen it before, instant response. If not, call your LLM and cache the result.</p>
+          <div class="code-block">
+<span class="comment">// Cache hit response</span>
+{
+  <span class="string">"cached"</span>: <span class="keyword">true</span>,
+  <span class="string">"response"</span>: <span class="string">"..."</span>,
+  <span class="string">"hits"</span>: <span class="function">42</span>,
+  <span class="string">"age"</span>: <span class="function">3600000</span>
+}
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+          <h3>Save Up to 90%</h3>
+          <p>Repeated prompts are served from cache. Watch your API costs plummet.</p>
+          <div class="code-block">
+<span class="comment"># Cache a response (POST)</span>
+curl -X POST <span class="string">"https://api.promptcache.dev/cache"</span> \
+  -H <span class="string">"X-API-Key: your-api-key"</span> \
+  -d <span class="string">'{"prompt":"...","response":"...","ttl":3600000}'</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="api-section" id="api">
+    <div class="section-header">
+      <h2>API Reference</h2>
+      <p>Simple REST API, ready to integrate</p>
+    </div>
+    <div class="api-grid">
+      <div class="api-endpoints">
+        <h3>Endpoints</h3>
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method method-get">GET</span>
+            <span class="endpoint-path">/cache/:prompt</span>
+          </div>
+          <p>Retrieve cached response for a prompt. Returns cached: true if hit, cached: false if miss.</p>
+        </div>
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method method-post">POST</span>
+            <span class="endpoint-path">/cache</span>
+          </div>
+          <p>Store a prompt-response pair in the cache with optional TTL (default: 1 hour).</p>
+        </div>
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method method-get">GET</span>
+            <span class="endpoint-path">/stats</span>
+          </div>
+          <p>Get cache statistics including hit rate, total entries, and backend info.</p>
+        </div>
+        <div class="endpoint">
+          <div class="endpoint-header">
+            <span class="method method-delete">DELETE</span>
+            <span class="endpoint-path">/cache</span>
+          </div>
+          <p>Clear all cached entries or a specific entry by prompt.</p>
+        </div>
+      </div>
+      <div class="api-key-section">
+        <h3>🔑 Get Your API Key</h3>
+        <p>Generate a free API key to start caching</p>
+        
+        <div style="background: var(--bg-tertiary); border-radius: 10px; padding: 1.5rem; margin-top: 1rem;">
+          <label style="display: block; margin-bottom: 0.5rem; color: var(--text-secondary);">Key Name (optional)</label>
+          <input type="text" id="keyName" placeholder="My API Key" style="width: 100%; padding: 0.75rem; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: white; margin-bottom: 1rem;">
+          <button class="btn btn-primary" onclick="generateApiKey()" style="width: 100%;">
+            🚀 Generate API Key
+          </button>
+        </div>
+        
+        <div id="apiKeyResult" style="margin-top: 1.5rem; display: none;">
+          <div class="api-key-display">
+            <code id="apiKey" style="word-break: break-all; font-size: 0.75rem;"></code>
+            <button class="copy-btn" onclick="copyApiKey()">Copy</button>
+          </div>
+          <p class="api-note" style="color: #f59e0b;">⚠️ Copy this now! It won't be shown again.</p>
+        </div>
+        
+        <div id="apiKeyLoading" style="text-align: center; padding: 2rem; display: none;">
+          <p>Generating key...</p>
+        </div>
+        
+        <div style="margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border-color);">
+          <h4 style="margin-bottom: 0.5rem;">Your API Keys</h4>
+          <div id="keysList" style="font-size: 0.875rem; color: var(--text-secondary);">
+            <p>Loading...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <script>
+    // Generate API Key
+    async function generateApiKey() {
+      const name = document.getElementById('keyName').value || 'API Key';
+      const resultDiv = document.getElementById('apiKeyResult');
+      const loadingDiv = document.getElementById('apiKeyLoading');
+      
+      resultDiv.style.display = 'none';
+      loadingDiv.style.display = 'block';
+      
+      try {
+        const res = await fetch('/api/keys', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name })
+        });
+        const data = await res.json();
+        
+        if (data.success) {
+          document.getElementById('apiKey').textContent = data.key;
+          resultDiv.style.display = 'block';
+          loadKeys(); // Refresh list
+        } else {
+          alert('Error: ' + data.error);
+        }
+      } catch (e) {
+        alert('Failed to generate key');
+      }
+      
+      loadingDiv.style.display = 'none';
+    }
+    
+    // Load user's keys
+    async function loadKeys() {
+      try {
+        const res = await fetch('/api/keys');
+        const data = await res.json();
+        
+        const list = document.getElementById('keysList');
+        if (data.keys && data.keys.length > 0) {
+          list.innerHTML = data.keys.map(k => 
+            '<div style="padding: 0.5rem; background: var(--bg-primary); border-radius: 6px; margin-bottom: 0.5rem;">' +
+              '<div style="font-weight: 600; color: var(--text-primary);">' + k.name + '</div>' +
+              '<div style="font-family: monospace; color: var(--text-muted);">' + k.key + '</div>' +
+              '<div style="font-size: 0.75rem; color: var(--text-muted);">' + 
+                k.requests + ' requests | ' + (k.active ? '✅ Active' : '❌ Revoked') + 
+              '</div>' +
+            '</div>'
+          ).join('');
+        } else {
+          list.innerHTML = '<p>No keys yet. Generate one above!</p>';
+        }
+      } catch (e) {
+        document.getElementById('keysList').innerHTML = '<p>Could not load keys</p>';
+      }
+    }
+    
+    // Copy API key
+    function copyApiKey() {
+      const key = document.getElementById('apiKey').textContent;
+      navigator.clipboard.writeText(key);
+      alert('API key copied!');
+    }
+    
+    // Load keys on page load
+    loadKeys();
+  </script>
+
+  <section class="demo-section" id="demo">
+    <div class="section-header">
+      <h2>Live Demo</h2>
+      <p>Try it right here, right now</p>
+    </div>
+    <div class="demo-container">
+      <div class="demo-box">
+        <div class="demo-header">
+          <span class="demo-dot red"></span>
+          <span class="demo-dot yellow"></span>
+          <span class="demo-dot green"></span>
+        </div>
+        <div class="demo-content">
+          <div class="demo-input">
+            <label>Your Prompt</label>
+            <textarea id="demoPrompt" placeholder="Type a prompt to check the cache...">Explain quantum computing in simple terms</textarea>
+          </div>
+          <div class="demo-output">
+            <label>Result</label>
+            <div class="demo-result" id="demoResult">
+              <span class="miss-tag">Click "Test Cache" to try...</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="text-align: center; margin-top: 1.5rem;">
+        <button class="btn btn-primary" onclick="testCache()">
+          ⚡ Test Cache
+        </button>
+        <button class="btn btn-secondary" onclick="clearDemo()" style="margin-left: 1rem;">
+          Clear
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta-section">
+    <h2>Ready to Cut Your LLM Costs?</h2>
+    <p>Join developers saving 90% on their AI bills. Get started in 30 seconds.</p>
+    <div style="display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;">
+      <a href="#pricing" class="btn btn-primary">Get Started Free</a>
+      <a href="#how-it-works" class="btn btn-secondary">See How It Works</a>
+    </div>
+  </section>
+
+  <footer>
+    <p>© 2026 PromptCache. Built with ⚡ for the AI community.</p>
+    <p style="margin-top: 0.5rem;">
+      <a href="#">Documentation</a> · 
+      <a href="#">GitHub</a> · 
+      <a href="#">Discord</a>
+    </p>
+  </footer>
+
+  <script>
+    function copyApiKey() {
+      const key = document.getElementById('apiKey').textContent;
+      navigator.clipboard.writeText(key).then(() => {
+        const btn = document.querySelector('.copy-btn');
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = 'Copy';
+          btn.classList.remove('copied');
+        }, 2000);
+      });
+    }
+
+    let cacheHits = {};
+
+    function testCache() {
+      const prompt = document.getElementById('demoPrompt').value;
+      const result = document.getElementById('demoResult');
+      
+      result.innerHTML = '<span style="color: #6366f1;">Checking cache...</span>';
+      
+      setTimeout(() => {
+        if (cacheHits[prompt]) {
+          cacheHits[prompt]++;
+          result.innerHTML = `
+<div class="cached-tag">✓ CACHE HIT</div>
+<div style="margin-top: 0.5rem; color: #94a3b8;">
+Response: "${prompt.substring(0, 30)}..." - Already cached!<br>
+Hits: ${cacheHits[prompt]} | Latency: &lt; 1ms
+</div>
+          `;
+        } else {
+          cacheHits[prompt] = 1;
+          result.innerHTML = `
+<div class="miss-tag">○ CACHE MISS</div>
+<div style="margin-top: 0.5rem; color: #94a3b8;">
+Calling LLM and caching response...<br>
+Prompt: "${prompt.substring(0, 40)}..."
+</div>
+          `;
+        }
+      }, 500);
+    }
+
+    function clearDemo() {
+      cacheHits = {};
+      document.getElementById('demoResult').innerHTML = '<span class="miss-tag">Cache cleared. Try again!</span>';
+    }
+  </script>
+  
+  <!-- Pricing Section -->
+  <section id="pricing" style="padding: 6rem 2rem; background: var(--bg-secondary);">
+    <div style="max-width: 1200px; margin: 0 auto; text-align: center;">
+      <h2 style="font-size: 2.5rem; font-weight: 700; margin-bottom: 1rem;">Simple Pricing</h2>
+      <p style="color: var(--text-secondary); margin-bottom: 3rem;">Choose the plan that fits your needs</p>
+      
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; max-width: 1000px; margin: 0 auto;">
+        
+        <!-- Free Tier -->
+        <div style="background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 1rem; padding: 2rem;">
+          <h3 style="font-size: 1.5rem; margin-bottom: 0.5rem;">🆓 Free</h3>
+          <div style="font-size: 2.5rem; font-weight: 700; margin-bottom: 0.5rem;">$0<span style="font-size: 1rem; color: var(--text-muted);">/mo</span></div>
+          <p style="color: var(--text-muted); margin-bottom: 1rem;">Perfect for testing</p>
+          <ul style="text-align: left; color: var(--text-secondary); list-style: none; margin-bottom: 1.5rem;">
+            <li style="margin-bottom: 0.5rem;">✅ 1,000 requests/day</li>
+            <li style="margin-bottom: 0.5rem;">✅ 100 cached entries</li>
+            <li style="margin-bottom: 0.5rem;">✅ Exact match only</li>
+            <li style="margin-bottom: 0.5rem;">✅ Basic analytics</li>
+          </ul>
+          <a href="#api" style="display: block; width: 100%; padding: 0.75rem; background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 0.5rem; cursor: pointer; text-decoration: none;">Get Started</a>
+        </div>
+        
+        <!-- Pro Tier -->
+        <div style="background: linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(139, 92, 246, 0.15)); border: 2px solid var(--accent-primary); border-radius: 1rem; padding: 2rem; position: relative;">
+          <div style="position: absolute; top: -12px; left: 50%; transform: translateX(-50%); background: var(--accent-primary); color: white; padding: 0.25rem 1rem; border-radius: 1rem; font-size: 0.875rem; font-weight: 600;">MOST POPULAR</div>
+          <h3 style="font-size: 1.5rem; margin-bottom: 0.5rem;">🚀 Pro</h3>
+          <div style="font-size: 2.5rem; font-weight: 700; margin-bottom: 0.5rem;">$29<span style="font-size: 1rem; color: var(--text-muted);">/mo</span></div>
+          <p style="color: var(--text-muted); margin-bottom: 1rem;">For serious apps</p>
+          <ul style="text-align: left; color: var(--text-secondary); list-style: none; margin-bottom: 1.5rem;">
+            <li style="margin-bottom: 0.5rem;">✅ 50,000 requests/day</li>
+            <li style="margin-bottom: 0.5rem;">✅ 10,000 cached entries</li>
+            <li style="margin-bottom: 0.5rem;">✅ 🔥 Semantic AI search</li>
+            <li style="margin-bottom: 0.5rem;">✅ Advanced analytics</li>
+            <li style="margin-bottom: 0.5rem;">✅ Priority support</li>
+          </ul>
+          <a href="#api" style="display: block; width: 100%; padding: 0.75rem; background: var(--accent-primary); border: none; color: white; border-radius: 0.5rem; cursor: pointer; font-weight: 600; text-decoration: none;">Upgrade to Pro</a>
+        </div>
+        
+        <!-- Enterprise Tier -->
+        <div style="background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 1rem; padding: 2rem;">
+          <h3 style="font-size: 1.5rem; margin-bottom: 0.5rem;">💎 Enterprise</h3>
+          <div style="font-size: 2.5rem; font-weight: 700; margin-bottom: 0.5rem;">$99<span style="font-size: 1rem; color: var(--text-muted);">/mo</span></div>
+          <p style="color: var(--text-muted); margin-bottom: 1rem;">Unlimited scale</p>
+          <ul style="text-align: left; color: var(--text-secondary); list-style: none; margin-bottom: 1.5rem;">
+            <li style="margin-bottom: 0.5rem;">✅ Unlimited requests</li>
+            <li style="margin-bottom: 0.5rem;">✅ Unlimited cache</li>
+            <li style="margin-bottom: 0.5rem;">✅ Semantic AI search</li>
+            <li style="margin-bottom: 0.5rem;">✅ Custom integrations</li>
+            <li style="margin-bottom: 0.5rem;">✅ Dedicated support</li>
+          </ul>
+          <a href="#api" style="display: block; width: 100%; padding: 0.75rem; background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 0.5rem; cursor: pointer; text-decoration: none;">Contact Sales</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Analytics Section -->
+  <section id="analytics" style="padding: 6rem 2rem; background: var(--bg-primary);">
+    <div style="max-width: 900px; margin: 0 auto; text-align: center;">
+      <h2 style="font-size: 2.5rem; font-weight: 700; margin-bottom: 1rem;">📊 Real-Time Analytics</h2>
+      <p style="color: var(--text-secondary); margin-bottom: 2rem;">See exactly how much you're saving</p>
+      
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
+        <div style="background: var(--bg-tertiary); border-radius: 1rem; padding: 1.5rem;">
+          <div style="font-size: 2rem; font-weight: 700; color: var(--accent-primary);" id="totalRequests">-</div>
+          <div style="color: var(--text-muted);">Total Requests</div>
+        </div>
+        <div style="background: var(--bg-tertiary); border-radius: 1rem; padding: 1.5rem;">
+          <div style="font-size: 2rem; font-weight: 700; color: #10b981;" id="cacheHits">-</div>
+          <div style="color: var(--text-muted);">Cache Hits</div>
+        </div>
+        <div style="background: var(--bg-tertiary); border-radius: 1rem; padding: 1.5rem;">
+          <div style="font-size: 2rem; font-weight: 700; color: #f59e0b;" id="hitRate">-</div>
+          <div style="color: var(--text-muted);">Hit Rate</div>
+        </div>
+        <div style="background: var(--bg-tertiary); border-radius: 1rem; padding: 1.5rem;">
+          <div style="font-size: 2rem; font-weight: 700; color: #ec4899;" id="savings">-</div>
+          <div style="color: var(--text-muted);">Est. Savings</div>
+        </div>
+      </div>
+      
+      <button class="btn btn-secondary" onclick="loadAnalytics()">🔄 Refresh Analytics</button>
+    </div>
+  </section>
+  
+  <script>
+    // Load analytics
+    async function loadAnalytics() {
+      try {
+        const res = await fetch('/api/analytics');
+        const data = await res.json();
+        
+        document.getElementById('totalRequests').textContent = data.totalRequests?.toLocaleString() || '0';
+        document.getElementById('cacheHits').textContent = data.totalCacheHits?.toLocaleString() || '0';
+        document.getElementById('hitRate').textContent = (data.hitRate || 0).toFixed(1) + '%';
+        
+        // Estimate savings: assume $0.01 per LLM call saved
+        const savings = (data.totalCacheHits || 0) * 0.01;
+        document.getElementById('savings').textContent = '$' + savings.toFixed(2);
+      } catch (e) {
+        console.log('Analytics not available');
+      }
+    }
+    
+    // Load on page load
+    loadAnalytics();
+    setInterval(loadAnalytics, 30000); // Refresh every 30s
+  </script>
+
+</body>
+</html>

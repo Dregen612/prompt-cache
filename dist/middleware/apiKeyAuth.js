@@ -12,8 +12,9 @@ function apiKeyAuth(req, res, next) {
     if (!result.valid) {
         return res.status(401).json({ error: result.error });
     }
-    // Attach API key to request
-    req.apiKey = result.keyData;
+    // Attach API key to request and record usage
+    req.apiKey = result.apiKey;
+    (0, apiKeys_1.recordRequest)(key);
     next();
 }
 // Optional auth - doesn't fail if no key, but attaches if valid
@@ -22,7 +23,8 @@ function optionalApiKeyAuth(req, res, next) {
     if (key) {
         const result = (0, apiKeys_1.validateAPIKey)(key);
         if (result.valid) {
-            req.apiKey = result.keyData;
+            req.apiKey = result.apiKey;
+            (0, apiKeys_1.recordRequest)(key);
         }
     }
     next();

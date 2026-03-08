@@ -3,8 +3,8 @@ export declare function requirePayment(required?: boolean): (req: Request, res: 
 export declare function getPaymentRequirement(): {
     price: number;
     currency: string;
-    description: any;
-    beneficiary: any;
+    description: string;
+    beneficiary: string;
 };
 export declare function hasPaymentHeader(req: Request): boolean;
 //# sourceMappingURL=payment.d.ts.map

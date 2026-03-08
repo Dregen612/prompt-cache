@@ -5,16 +5,15 @@
     "lib": ["ES2020"],
     "outDir": "./dist",
     "rootDir": "./src",
-    "strict": false,
+    "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "declaration": false,
-    "sourceMap": true,
-    "noImplicitAny": false,
-    "jsx": "react"
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true
   },
-  "include": ["src/index.ts", "src/middleware/**/*", "src/services/pgCache.ts", "src/utils/**/*"],
-  "exclude": ["node_modules", "dist", "src/analytics.tsx", "src/semanticCache.ts", "src/services/stripe.ts", "src/services/usage.ts"]
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
 }

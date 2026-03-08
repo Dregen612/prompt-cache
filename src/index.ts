@@ -1,11 +1,11 @@
 import express from 'express';
-import path from 'path';
-import fs from 'fs';
 import Redis from 'ioredis';
 import crypto from 'crypto';
 import Stripe from 'stripe';
 import { initPgCache, isPgAvailable, isVectorAvailable, pgSet, pgGet, pgDel, pgClear, pgStats, pgCleanup, pgSemanticSearch, CacheEntry } from './services/pgCache';
 import { apiKeyAuth, optionalApiKeyAuth } from './middleware/apiKeyAuth';
+import { rateLimiter } from './middleware/rateLimit';
+import { recordRequest, getUsageStats, TIERS } from './services/usageLimits';
 
 // Stripe setup
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder', {
@@ -16,29 +16,6 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
-
-// Serve landing page at root
-app.get('/', (req, res) => {
-  const htmlPath = path.join(__dirname, '..', 'landing.html');
-  if (fs.existsSync(htmlPath)) {
-    res.sendFile(htmlPath);
-  } else {
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head><title>PromptCache</title></head>
-      <body style="background:#030307;color:#f8fafc;font-family:system-ui;padding:2rem;">
-        <h1>🚀 PromptCache API</h1>
-        <p>Pay-per-call AI caching with crypto.</p>
-        <ul>
-          <li><a href="/health" style="color:#6366f1;">/health</a> - Health check</li>
-          <li><a href="/cache/test" style="color:#6365f1;">/cache/test</a> - Test cache</li>
-        </ul>
-      </body>
-      </html>
-    `);
-  }
-});
 
 // Initialize PostgreSQL cache
 initPgCache().then(() => {});
@@ -118,8 +95,15 @@ app.get('/health', async (req, res) => {
   });
 });
 
-// Cache a prompt with TTL
-app.post('/cache', async (req, res) => {
+// Cache a prompt with TTL (rate limited: 100 req/min)
+app.post('/cache', rateLimiter({ windowMs: 60000, maxRequests: 100 }), async (req, res) => {
+  const apiKey = req.headers['x-api-key'] as string;
+  const usage = apiKey ? recordRequest(apiKey, false) : { allowed: true, remaining: -1, tier: 'free' };
+  
+  if (!usage.allowed) {
+    return res.status(429).json({ error: 'Daily limit exceeded', tier: usage.tier, remaining: 0 });
+  }
+  
   const { prompt, response, model, ttl = 3600000 } = req.body;
   
   if (!prompt || !response) {
@@ -228,7 +212,7 @@ app.post('/cache/batch', optionalApiKeyAuth, async (req, res) => {
   });
 });
 
-// Batch get multiple cached prompts (requires payment for cache hits)
+// Batch get multiple cached prompts
 app.get('/cache/batch', optionalApiKeyAuth, async (req, res) => {
   const prompts = (req.query.prompts as string)?.split(',').map(p => p.trim()).filter(Boolean) || [];
   
@@ -333,8 +317,9 @@ app.get('/cache/batch', optionalApiKeyAuth, async (req, res) => {
   });
 });
 
-// Get cached prompt (requires payment for cache hits)
-app.get('/cache/:prompt(*)', async (req, res) => {
+// Get cached prompt (rate limited: 200 req/min)
+app.get('/cache/:prompt(*)', rateLimiter({ windowMs: 60000, maxRequests: 200 }), async (req, res) => {
+  const apiKey = req.headers['x-api-key'] as string;
   const key = hashPrompt(req.params.prompt);
   
   let entry: CacheEntry | null = null;
@@ -449,6 +434,28 @@ app.get('/stats', async (req, res) => {
   }
 
   res.json(stats);
+});
+
+// Get usage stats for an API key
+app.get('/usage/:apiKey', optionalApiKeyAuth, async (req, res) => {
+  const { apiKey } = req.params;
+  
+  if (!apiKey) {
+    return res.status(400).json({ error: 'API key required' });
+  }
+  
+  const stats = getUsageStats(apiKey);
+  const tierInfo = TIERS[stats.tier] || TIERS.free;
+  
+  res.json({
+    apiKey: apiKey.slice(0, 8) + '...',
+    ...stats,
+    tierLimit: tierInfo.requestsPerDay,
+    features: {
+      semanticSearch: tierInfo.semanticSearch,
+      maxCacheSize: tierInfo.cacheSize
+    }
+  });
 });
 
 // Detailed analytics
@@ -591,127 +598,6 @@ app.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (re
     console.error('Webhook error:', error.message);
     res.status(400).json({ error: error.message });
   }
-});
-
-// ============================================
-// API Key Management
-// ============================================
-
-import { generateAPIKey, validateAPIKey, getAllKeys, revokeAPIKey, deleteAPIKey, getKeyStats } from './services/apiKeys';
-
-// Create new API key
-app.post('/api/keys', (req, res) => {
-  try {
-    const { name } = req.body;
-    const key = generateAPIKey(name || 'API Key');
-    
-    res.json({
-      success: true,
-      key,
-      message: 'Store this key securely - it will not be shown again!'
-    });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// List all keys (admin)
-app.get('/api/keys', (req, res) => {
-  try {
-    const keys = getAllKeys().map(k => ({
-      key: k.key.slice(0, 12) + '...' + k.key.slice(-4),
-      name: k.name,
-      created: new Date(k.created).toISOString(),
-      lastUsed: k.lastUsed ? new Date(k.lastUsed).toISOString() : null,
-      requests: k.requests,
-      active: k.active
-    }));
-    
-    res.json({ keys });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Revoke API key
-app.delete('/api/keys/:key', (req, res) => {
-  try {
-    const { key } = req.params;
-    const success = revokeAPIKey(key);
-    
-    res.json({ success, message: success ? 'Key revoked' : 'Key not found' });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Validate key (check if active)
-app.get('/api/keys/validate/:key', (req, res) => {
-  try {
-    const { key } = req.params;
-    const result = validateAPIKey(key);
-    
-    res.json({
-      valid: result.valid,
-      keyData: result.keyData ? {
-        name: result.keyData.name,
-        requests: result.keyData.requests
-      } : null
-    });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Analytics & Stats
-app.get('/api/analytics', (req, res) => {
-  try {
-    const keys = getAllKeys();
-    const totalRequests = keys.reduce((sum, k) => sum + k.requests, 0);
-    const totalCacheHits = keys.reduce((sum, k) => sum + k.cacheHits, 0);
-    
-    res.json({
-      totalKeys: keys.length,
-      totalRequests,
-      totalCacheHits,
-      hitRate: totalRequests > 0 ? (totalCacheHits / totalRequests) * 100 : 0,
-      keys: keys.map(k => ({
-        key: k.key.slice(0, 12) + '...',
-        name: k.name,
-        tier: k.tier,
-        requests: k.requests,
-        hits: k.cacheHits,
-        active: k.active
-      }))
-    });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Cache stats
-app.get('/api/cache/stats', (req, res) => {
-  try {
-    res.json({
-      pgAvailable: isPgAvailable(),
-      vectorAvailable: isVectorAvailable(),
-      memoryEntries: memoryCache.size,
-      ...pgStats()
-    });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Available tiers
-app.get('/api/tiers', (req, res) => {
-  res.json({
-    tiers: {
-      free: { name: 'Free', requestsPerDay: 1000, price: 0 },
-      pro: { name: 'Pro', requestsPerDay: 50000, price: 29 },
-      enterprise: { name: 'Enterprise', requestsPerDay: -1, price: 99 }
-    }
-  });
 });
 
 app.listen(PORT, () => {

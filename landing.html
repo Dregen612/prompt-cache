@@ -773,8 +773,6 @@
       <ul class="nav-links">
         <li><a href="#features">Features</a></li>
         <li><a href="#how-it-works">How It Works</a></li>
-        <li><a href="#pricing">Pricing</a></li>
-        <li><a href="#analytics">Analytics</a></li>
         <li><a href="#api">API</a></li>
         <li><a href="#demo">Demo</a></li>
       </ul>
@@ -784,29 +782,25 @@
 
   <section class="hero">
     <div class="hero-content">
-      <div class="badge">
+      <div class="badge animate">
         <span class="badge-dot"></span>
-        Pay-per-call AI Caching
+        Now with Semantic Search
       </div>
-      <h1>
-        Stop Paying for<br>
-        <span class="gradient">the Same Answers</span>
+      <h1 class="animate delay-1">
+        Intelligent LLM<br>
+        <span class="gradient">Response Caching</span>
       </h1>
-      <p>
-        Cache your LLM responses and pay only when we serve a cached hit — 
-        less than a tenth of a cent per call. No subscriptions. No credit cards. 
-        Just get an API key and start caching.
+      <p class="animate delay-2">
+        Slash your LLM costs by up to 90% with intelligent prompt caching. 
+        Semantic similarity search finds cached responses even when prompts vary slightly.
       </p>
-      <div class="hero-buttons">
-        <a href="#how-it-works" class="btn btn-primary">
-          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="margin-right: 8px;"><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/></svg>
-          See How It Works
+      <div class="hero-buttons animate delay-3">
+        <a href="#api" class="btn btn-primary">
+          Get API Key
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
         </a>
-        <a href="#demo" class="btn btn-secondary">Try Free Demo</a>
+        <a href="#demo" class="btn btn-secondary">Try Demo</a>
       </div>
-      <p style="margin-top: 1.5rem; color: var(--text-muted); font-size: 0.875rem;">
-        💳 Or <a href="#api" style="color: var(--accent-primary);">get an API key</a> — 1,000 free requests/month
-      </p>
     </div>
   </section>
 
@@ -831,39 +825,39 @@
 
   <section class="features" id="features">
     <div class="section-header">
-      <h2>Why PromptCache?</h2>
-      <p>Cut your LLM costs by up to 90% — no matter which model you use</p>
+      <h2>Built for Production</h2>
+      <p>Everything you need to cache LLM responses at scale</p>
     </div>
     <div class="features-grid">
       <div class="feature-card">
-        <div class="feature-icon">💰</div>
-        <h3>Pay Per Use</h3>
-        <p>No monthly fees. No subscriptions. Pay only $0.001 (less than a cent) when we serve a cached response. Connect your wallet and start.</p>
-      </div>
-      <div class="feature-card">
         <div class="feature-icon">🧠</div>
-        <h3>Smart Caching</h3>
-        <p>Our AI understands meaning, not just exact matches. Ask the same question differently? We'll still find the cached answer.</p>
+        <h3>Semantic Search</h3>
+        <p>Find similar cached responses even when prompts differ slightly. Our vector embeddings understand meaning, not just exact matches.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon">⚡</div>
-        <h3>Lightning Fast</h3>
-        <p>Cache hits return in under 1 millisecond — faster than calling ChatGPT or any API. Your users won't notice.</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">🌍</div>
-        <h3>Global Access</h3>
-        <p>No credit card needed. Anyone with a crypto wallet (Coinbase, MetaMask, etc.) can use it. Great for international users.</p>
+        <h3>Instant Hits</h3>
+        <p>Sub-millisecond cache retrieval. When you've got a hit, it's faster than calling the LLM directly.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon">🔄</div>
-        <h3>Auto Expiration</h3>
-        <p>Set how long cached answers last (1 hour, 1 day, whatever you need). Old data auto-deletes. No maintenance needed.</p>
+        <h3>Multiple Backends</h3>
+        <p>PostgreSQL with pgvector, Redis, or in-memory. Choose your storage layer or let PromptCache auto-detect what's available.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">⏰</div>
+        <h3>TTL & Expiration</h3>
+        <p>Set per-entry expiration times. Automatic cleanup keeps your cache lean without manual intervention.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon">📊</div>
-        <h3>See Your Savings</h3>
-        <p>Real-time dashboard shows hit rate, total saved, and usage. Know exactly what you're paying for.</p>
+        <h3>Real-time Stats</h3>
+        <p>Monitor hit rates, cache size, and performance metrics. Know exactly how much you're saving.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔒</div>
+        <h3>Enterprise Security</h3>
+        <p>Your API keys, your data. End-to-end encryption, SOC2 compliant infrastructure, and complete data isolation.</p>
       </div>
     </div>
   </section>
@@ -957,106 +951,16 @@ curl -X POST <span class="string">"https://api.promptcache.dev/cache"</span> \
         </div>
       </div>
       <div class="api-key-section">
-        <h3>🔑 Get Your API Key</h3>
-        <p>Generate a free API key to start caching</p>
-        
-        <div style="background: var(--bg-tertiary); border-radius: 10px; padding: 1.5rem; margin-top: 1rem;">
-          <label style="display: block; margin-bottom: 0.5rem; color: var(--text-secondary);">Key Name (optional)</label>
-          <input type="text" id="keyName" placeholder="My API Key" style="width: 100%; padding: 0.75rem; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; color: white; margin-bottom: 1rem;">
-          <button class="btn btn-primary" onclick="generateApiKey()" style="width: 100%;">
-            🚀 Generate API Key
-          </button>
+        <h3>Your API Key</h3>
+        <p>Copy this key to start caching immediately</p>
+        <div class="api-key-display">
+          <code id="apiKey">pc_live_sk_2KAUtjuj4jEgCP6X3I8TpQky1Y9s74HI</code>
+          <button class="copy-btn" onclick="copyApiKey()">Copy</button>
         </div>
-        
-        <div id="apiKeyResult" style="margin-top: 1.5rem; display: none;">
-          <div class="api-key-display">
-            <code id="apiKey" style="word-break: break-all; font-size: 0.75rem;"></code>
-            <button class="copy-btn" onclick="copyApiKey()">Copy</button>
-          </div>
-          <p class="api-note" style="color: #f59e0b;">⚠️ Copy this now! It won't be shown again.</p>
-        </div>
-        
-        <div id="apiKeyLoading" style="text-align: center; padding: 2rem; display: none;">
-          <p>Generating key...</p>
-        </div>
-        
-        <div style="margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border-color);">
-          <h4 style="margin-bottom: 0.5rem;">Your API Keys</h4>
-          <div id="keysList" style="font-size: 0.875rem; color: var(--text-secondary);">
-            <p>Loading...</p>
-          </div>
-        </div>
+        <p class="api-note">🔒 Keep this secret. It provides full access to your cache.</p>
       </div>
     </div>
   </section>
-
-  <script>
-    // Generate API Key
-    async function generateApiKey() {
-      const name = document.getElementById('keyName').value || 'API Key';
-      const resultDiv = document.getElementById('apiKeyResult');
-      const loadingDiv = document.getElementById('apiKeyLoading');
-      
-      resultDiv.style.display = 'none';
-      loadingDiv.style.display = 'block';
-      
-      try {
-        const res = await fetch('/api/keys', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name })
-        });
-        const data = await res.json();
-        
-        if (data.success) {
-          document.getElementById('apiKey').textContent = data.key;
-          resultDiv.style.display = 'block';
-          loadKeys(); // Refresh list
-        } else {
-          alert('Error: ' + data.error);
-        }
-      } catch (e) {
-        alert('Failed to generate key');
-      }
-      
-      loadingDiv.style.display = 'none';
-    }
-    
-    // Load user's keys
-    async function loadKeys() {
-      try {
-        const res = await fetch('/api/keys');
-        const data = await res.json();
-        
-        const list = document.getElementById('keysList');
-        if (data.keys && data.keys.length > 0) {
-          list.innerHTML = data.keys.map(k => 
-            '<div style="padding: 0.5rem; background: var(--bg-primary); border-radius: 6px; margin-bottom: 0.5rem;">' +
-              '<div style="font-weight: 600; color: var(--text-primary);">' + k.name + '</div>' +
-              '<div style="font-family: monospace; color: var(--text-muted);">' + k.key + '</div>' +
-              '<div style="font-size: 0.75rem; color: var(--text-muted);">' + 
-                k.requests + ' requests | ' + (k.active ? '✅ Active' : '❌ Revoked') + 
-              '</div>' +
-            '</div>'
-          ).join('');
-        } else {
-          list.innerHTML = '<p>No keys yet. Generate one above!</p>';
-        }
-      } catch (e) {
-        document.getElementById('keysList').innerHTML = '<p>Could not load keys</p>';
-      }
-    }
-    
-    // Copy API key
-    function copyApiKey() {
-      const key = document.getElementById('apiKey').textContent;
-      navigator.clipboard.writeText(key);
-      alert('API key copied!');
-    }
-    
-    // Load keys on page load
-    loadKeys();
-  </script>
 
   <section class="demo-section" id="demo">
     <div class="section-header">
@@ -1095,12 +999,9 @@ curl -X POST <span class="string">"https://api.promptcache.dev/cache"</span> \
   </section>
 
   <section class="cta-section">
-    <h2>Ready to Cut Your LLM Costs?</h2>
-    <p>Join developers saving 90% on their AI bills. Get started in 30 seconds.</p>
-    <div style="display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;">
-      <a href="#pricing" class="btn btn-primary">Get Started Free</a>
-      <a href="#how-it-works" class="btn btn-secondary">See How It Works</a>
-    </div>
+    <h2>Ready to Start Saving?</h2>
+    <p>Get your API key and integrate in minutes. No credit card required.</p>
+    <a href="#api" class="btn btn-primary">Get Started Free</a>
   </section>
 
   <footer>
@@ -1167,110 +1068,50 @@ Prompt: "${prompt.substring(0, 40)}..."
   <section id="pricing" style="padding: 6rem 2rem; background: var(--bg-secondary);">
     <div style="max-width: 1200px; margin: 0 auto; text-align: center;">
       <h2 style="font-size: 2.5rem; font-weight: 700; margin-bottom: 1rem;">Simple Pricing</h2>
-      <p style="color: var(--text-secondary); margin-bottom: 3rem;">Choose the plan that fits your needs</p>
+      <p style="color: var(--text-secondary); margin-bottom: 3rem;">Start free, scale as you grow</p>
       
-      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; max-width: 1000px; margin: 0 auto;">
-        
-        <!-- Free Tier -->
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 2rem; max-width: 900px; margin: 0 auto;">
+        <!-- Free -->
         <div style="background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 1rem; padding: 2rem;">
-          <h3 style="font-size: 1.5rem; margin-bottom: 0.5rem;">🆓 Free</h3>
-          <div style="font-size: 2.5rem; font-weight: 700; margin-bottom: 0.5rem;">$0<span style="font-size: 1rem; color: var(--text-muted);">/mo</span></div>
-          <p style="color: var(--text-muted); margin-bottom: 1rem;">Perfect for testing</p>
-          <ul style="text-align: left; color: var(--text-secondary); list-style: none; margin-bottom: 1.5rem;">
-            <li style="margin-bottom: 0.5rem;">✅ 1,000 requests/day</li>
-            <li style="margin-bottom: 0.5rem;">✅ 100 cached entries</li>
-            <li style="margin-bottom: 0.5rem;">✅ Exact match only</li>
-            <li style="margin-bottom: 0.5rem;">✅ Basic analytics</li>
+          <h3 style="font-size: 1.5rem; margin-bottom: 0.5rem;">Free</h3>
+          <div style="font-size: 2.5rem; font-weight: 700; margin-bottom: 1rem;">$0<span style="font-size: 1rem; color: var(--text-muted);">/mo</span></div>
+          <ul style="text-align: left; color: var(--text-secondary); list-style: none; margin-bottom: 2rem;">
+            <li style="margin-bottom: 0.5rem;">✓ 1,000 requests/month</li>
+            <li style="margin-bottom: 0.5rem;">✓ Exact match caching</li>
+            <li style="margin-bottom: 0.5rem;">✓ Basic analytics</li>
           </ul>
-          <a href="#api" style="display: block; width: 100%; padding: 0.75rem; background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 0.5rem; cursor: pointer; text-decoration: none;">Get Started</a>
+          <button style="width: 100%; padding: 0.75rem; background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 0.5rem; cursor: pointer;">Get Started</button>
         </div>
         
-        <!-- Pro Tier -->
-        <div style="background: linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(139, 92, 246, 0.15)); border: 2px solid var(--accent-primary); border-radius: 1rem; padding: 2rem; position: relative;">
-          <div style="position: absolute; top: -12px; left: 50%; transform: translateX(-50%); background: var(--accent-primary); color: white; padding: 0.25rem 1rem; border-radius: 1rem; font-size: 0.875rem; font-weight: 600;">MOST POPULAR</div>
-          <h3 style="font-size: 1.5rem; margin-bottom: 0.5rem;">🚀 Pro</h3>
-          <div style="font-size: 2.5rem; font-weight: 700; margin-bottom: 0.5rem;">$29<span style="font-size: 1rem; color: var(--text-muted);">/mo</span></div>
-          <p style="color: var(--text-muted); margin-bottom: 1rem;">For serious apps</p>
-          <ul style="text-align: left; color: var(--text-secondary); list-style: none; margin-bottom: 1.5rem;">
-            <li style="margin-bottom: 0.5rem;">✅ 50,000 requests/day</li>
-            <li style="margin-bottom: 0.5rem;">✅ 10,000 cached entries</li>
-            <li style="margin-bottom: 0.5rem;">✅ 🔥 Semantic AI search</li>
-            <li style="margin-bottom: 0.5rem;">✅ Advanced analytics</li>
-            <li style="margin-bottom: 0.5rem;">✅ Priority support</li>
+        <!-- Pro -->
+        <div style="background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(139, 92, 246, 0.1)); border: 1px solid var(--accent-primary); border-radius: 1rem; padding: 2rem; position: relative;">
+          <div style="position: absolute; top: -12px; left: 50%; transform: translateX(-50%); background: var(--accent-primary); color: white; padding: 0.25rem 1rem; border-radius: 1rem; font-size: 0.875rem;">MOST POPULAR</div>
+          <h3 style="font-size: 1.5rem; margin-bottom: 0.5rem;">Pro</h3>
+          <div style="font-size: 2.5rem; font-weight: 700; margin-bottom: 1rem;">$29<span style="font-size: 1rem; color: var(--text-muted);">/mo</span></div>
+          <ul style="text-align: left; color: var(--text-secondary); list-style: none; margin-bottom: 2rem;">
+            <li style="margin-bottom: 0.5rem;">✓ 100,000 requests/month</li>
+            <li style="margin-bottom: 0.5rem;">✓ Semantic caching (AI)</li>
+            <li style="margin-bottom: 0.5rem;">✓ Advanced analytics</li>
+            <li style="margin-bottom: 0.5rem;">✓ Priority support</li>
           </ul>
-          <a href="#api" style="display: block; width: 100%; padding: 0.75rem; background: var(--accent-primary); border: none; color: white; border-radius: 0.5rem; cursor: pointer; font-weight: 600; text-decoration: none;">Upgrade to Pro</a>
+          <button style="width: 100%; padding: 0.75rem; background: var(--accent-primary); border: none; color: white; border-radius: 0.5rem; cursor: pointer; font-weight: 600;">Start Free Trial</button>
         </div>
         
-        <!-- Enterprise Tier -->
+        <!-- Enterprise -->
         <div style="background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 1rem; padding: 2rem;">
-          <h3 style="font-size: 1.5rem; margin-bottom: 0.5rem;">💎 Enterprise</h3>
-          <div style="font-size: 2.5rem; font-weight: 700; margin-bottom: 0.5rem;">$99<span style="font-size: 1rem; color: var(--text-muted);">/mo</span></div>
-          <p style="color: var(--text-muted); margin-bottom: 1rem;">Unlimited scale</p>
-          <ul style="text-align: left; color: var(--text-secondary); list-style: none; margin-bottom: 1.5rem;">
-            <li style="margin-bottom: 0.5rem;">✅ Unlimited requests</li>
-            <li style="margin-bottom: 0.5rem;">✅ Unlimited cache</li>
-            <li style="margin-bottom: 0.5rem;">✅ Semantic AI search</li>
-            <li style="margin-bottom: 0.5rem;">✅ Custom integrations</li>
-            <li style="margin-bottom: 0.5rem;">✅ Dedicated support</li>
+          <h3 style="font-size: 1.5rem; margin-bottom: 0.5rem;">Enterprise</h3>
+          <div style="font-size: 2.5rem; font-weight: 700; margin-bottom: 1rem;">$99<span style="font-size: 1rem; color: var(--text-muted);">/mo</span></div>
+          <ul style="text-align: left; color: var(--text-secondary); list-style: none; margin-bottom: 2rem;">
+            <li style="margin-bottom: 0.5rem;">✓ Unlimited requests</li>
+            <li style="margin-bottom: 0.5rem;">✓ Custom integrations</li>
+            <li style="margin-bottom: 0.5rem;">✓ Dedicated support</li>
+            <li style="margin-bottom: 0.5rem;">✓ SLA guarantee</li>
           </ul>
-          <a href="#api" style="display: block; width: 100%; padding: 0.75rem; background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 0.5rem; cursor: pointer; text-decoration: none;">Contact Sales</a>
+          <button style="width: 100%; padding: 0.75rem; background: var(--bg-card); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 0.5rem; cursor: pointer;">Contact Sales</button>
         </div>
       </div>
     </div>
   </section>
-
-  <!-- Analytics Section -->
-  <section id="analytics" style="padding: 6rem 2rem; background: var(--bg-primary);">
-    <div style="max-width: 900px; margin: 0 auto; text-align: center;">
-      <h2 style="font-size: 2.5rem; font-weight: 700; margin-bottom: 1rem;">📊 Real-Time Analytics</h2>
-      <p style="color: var(--text-secondary); margin-bottom: 2rem;">See exactly how much you're saving</p>
-      
-      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
-        <div style="background: var(--bg-tertiary); border-radius: 1rem; padding: 1.5rem;">
-          <div style="font-size: 2rem; font-weight: 700; color: var(--accent-primary);" id="totalRequests">-</div>
-          <div style="color: var(--text-muted);">Total Requests</div>
-        </div>
-        <div style="background: var(--bg-tertiary); border-radius: 1rem; padding: 1.5rem;">
-          <div style="font-size: 2rem; font-weight: 700; color: #10b981;" id="cacheHits">-</div>
-          <div style="color: var(--text-muted);">Cache Hits</div>
-        </div>
-        <div style="background: var(--bg-tertiary); border-radius: 1rem; padding: 1.5rem;">
-          <div style="font-size: 2rem; font-weight: 700; color: #f59e0b;" id="hitRate">-</div>
-          <div style="color: var(--text-muted);">Hit Rate</div>
-        </div>
-        <div style="background: var(--bg-tertiary); border-radius: 1rem; padding: 1.5rem;">
-          <div style="font-size: 2rem; font-weight: 700; color: #ec4899;" id="savings">-</div>
-          <div style="color: var(--text-muted);">Est. Savings</div>
-        </div>
-      </div>
-      
-      <button class="btn btn-secondary" onclick="loadAnalytics()">🔄 Refresh Analytics</button>
-    </div>
-  </section>
-  
-  <script>
-    // Load analytics
-    async function loadAnalytics() {
-      try {
-        const res = await fetch('/api/analytics');
-        const data = await res.json();
-        
-        document.getElementById('totalRequests').textContent = data.totalRequests?.toLocaleString() || '0';
-        document.getElementById('cacheHits').textContent = data.totalCacheHits?.toLocaleString() || '0';
-        document.getElementById('hitRate').textContent = (data.hitRate || 0).toFixed(1) + '%';
-        
-        // Estimate savings: assume $0.01 per LLM call saved
-        const savings = (data.totalCacheHits || 0) * 0.01;
-        document.getElementById('savings').textContent = '$' + savings.toFixed(2);
-      } catch (e) {
-        console.log('Analytics not available');
-      }
-    }
-    
-    // Load on page load
-    loadAnalytics();
-    setInterval(loadAnalytics, 30000); // Refresh every 30s
-  </script>
 
 </body>
 </html>

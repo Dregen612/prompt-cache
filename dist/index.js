@@ -37,8 +37,6 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
-const path_1 = __importDefault(require("path"));
-const fs_1 = __importDefault(require("fs"));
 const ioredis_1 = __importDefault(require("ioredis"));
 const crypto_1 = __importDefault(require("crypto"));
 const stripe_1 = __importDefault(require("stripe"));
@@ -51,29 +49,6 @@ const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || 'sk_test_pl
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 3000;
 app.use(express_1.default.json());
-// Serve landing page at root
-app.get('/', (req, res) => {
-    const htmlPath = path_1.default.join(__dirname, '..', 'landing.html');
-    if (fs_1.default.existsSync(htmlPath)) {
-        res.sendFile(htmlPath);
-    }
-    else {
-        res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head><title>PromptCache</title></head>
-      <body style="background:#030307;color:#f8fafc;font-family:system-ui;padding:2rem;">
-        <h1>🚀 PromptCache API</h1>
-        <p>Pay-per-call AI caching with crypto.</p>
-        <ul>
-          <li><a href="/health" style="color:#6366f1;">/health</a> - Health check</li>
-          <li><a href="/cache/test" style="color:#6365f1;">/cache/test</a> - Test cache</li>
-        </ul>
-      </body>
-      </html>
-    `);
-    }
-});
 // Initialize PostgreSQL cache
 (0, pgCache_1.initPgCache)().then(() => { });
 // Redis client (optional - falls back to memory)
@@ -229,7 +204,7 @@ app.post('/cache/batch', apiKeyAuth_1.optionalApiKeyAuth, async (req, res) => {
         backend: getBackend()
     });
 });
-// Batch get multiple cached prompts (requires payment for cache hits)
+// Batch get multiple cached prompts
 app.get('/cache/batch', apiKeyAuth_1.optionalApiKeyAuth, async (req, res) => {
     const prompts = req.query.prompts?.split(',').map(p => p.trim()).filter(Boolean) || [];
     if (prompts.length === 0) {
@@ -325,7 +300,7 @@ app.get('/cache/batch', apiKeyAuth_1.optionalApiKeyAuth, async (req, res) => {
         backend: getBackend()
     });
 });
-// Get cached prompt (requires payment for cache hits)
+// Get cached prompt
 app.get('/cache/:prompt(*)', async (req, res) => {
     const key = hashPrompt(req.params.prompt);
     let entry = null;
@@ -560,119 +535,6 @@ app.post('/webhook/stripe', express_1.default.raw({ type: 'application/json' }),
         console.error('Webhook error:', error.message);
         res.status(400).json({ error: error.message });
     }
-});
-// ============================================
-// API Key Management
-// ============================================
-const apiKeys_1 = require("./services/apiKeys");
-// Create new API key
-app.post('/api/keys', (req, res) => {
-    try {
-        const { name } = req.body;
-        const key = (0, apiKeys_1.generateAPIKey)(name || 'API Key');
-        res.json({
-            success: true,
-            key,
-            message: 'Store this key securely - it will not be shown again!'
-        });
-    }
-    catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-// List all keys (admin)
-app.get('/api/keys', (req, res) => {
-    try {
-        const keys = (0, apiKeys_1.getAllKeys)().map(k => ({
-            key: k.key.slice(0, 12) + '...' + k.key.slice(-4),
-            name: k.name,
-            created: new Date(k.created).toISOString(),
-            lastUsed: k.lastUsed ? new Date(k.lastUsed).toISOString() : null,
-            requests: k.requests,
-            active: k.active
-        }));
-        res.json({ keys });
-    }
-    catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-// Revoke API key
-app.delete('/api/keys/:key', (req, res) => {
-    try {
-        const { key } = req.params;
-        const success = (0, apiKeys_1.revokeAPIKey)(key);
-        res.json({ success, message: success ? 'Key revoked' : 'Key not found' });
-    }
-    catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-// Validate key (check if active)
-app.get('/api/keys/validate/:key', (req, res) => {
-    try {
-        const { key } = req.params;
-        const result = (0, apiKeys_1.validateAPIKey)(key);
-        res.json({
-            valid: result.valid,
-            keyData: result.keyData ? {
-                name: result.keyData.name,
-                requests: result.keyData.requests
-            } : null
-        });
-    }
-    catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-// Analytics & Stats
-app.get('/api/analytics', (req, res) => {
-    try {
-        const keys = (0, apiKeys_1.getAllKeys)();
-        const totalRequests = keys.reduce((sum, k) => sum + k.requests, 0);
-        const totalCacheHits = keys.reduce((sum, k) => sum + k.cacheHits, 0);
-        res.json({
-            totalKeys: keys.length,
-            totalRequests,
-            totalCacheHits,
-            hitRate: totalRequests > 0 ? (totalCacheHits / totalRequests) * 100 : 0,
-            keys: keys.map(k => ({
-                key: k.key.slice(0, 12) + '...',
-                name: k.name,
-                tier: k.tier,
-                requests: k.requests,
-                hits: k.cacheHits,
-                active: k.active
-            }))
-        });
-    }
-    catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-// Cache stats
-app.get('/api/cache/stats', (req, res) => {
-    try {
-        res.json({
-            pgAvailable: (0, pgCache_1.isPgAvailable)(),
-            vectorAvailable: (0, pgCache_1.isVectorAvailable)(),
-            memoryEntries: memoryCache.size,
-            ...(0, pgCache_1.pgStats)()
-        });
-    }
-    catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-// Available tiers
-app.get('/api/tiers', (req, res) => {
-    res.json({
-        tiers: {
-            free: { name: 'Free', requestsPerDay: 1000, price: 0 },
-            pro: { name: 'Pro', requestsPerDay: 50000, price: 29 },
-            enterprise: { name: 'Enterprise', requestsPerDay: -1, price: 99 }
-        }
-    });
 });
 app.listen(PORT, () => {
     console.log(`🚀 PromptCache running on port ${PORT}`);

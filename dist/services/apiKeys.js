@@ -5,67 +5,88 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.generateAPIKey = generateAPIKey;
 exports.validateAPIKey = validateAPIKey;
-exports.getAllKeys = getAllKeys;
+exports.recordRequest = recordRequest;
+exports.getAllAPIKeys = getAllAPIKeys;
+exports.getAPIKey = getAPIKey;
 exports.revokeAPIKey = revokeAPIKey;
-exports.deleteAPIKey = deleteAPIKey;
-exports.getKeyStats = getKeyStats;
-// API Key Management Service
+exports.resetDailyLimits = resetDailyLimits;
+// API Key Management for PromptCache
 const crypto_1 = __importDefault(require("crypto"));
 // In-memory store (would use DB in production)
 const apiKeys = new Map();
 // Generate new API key
-function generateAPIKey(name = 'Default', tier = 'free') {
-    const prefix = tier === 'free' ? 'pc_live' : tier === 'pro' ? 'pc_pro' : 'pc_ent';
-    const randomPart = crypto_1.default.randomBytes(16).toString('hex');
-    const key = `${prefix}_sk_${randomPart}`;
-    apiKeys.set(key, {
+function generateAPIKey(name, tier = 'free') {
+    const id = crypto_1.default.randomBytes(8).toString('hex');
+    const key = `pc_${tier}_sk_${crypto_1.default.randomBytes(24).toString('hex')}`;
+    const limits = {
+        free: 1000,
+        pro: 100000,
+        enterprise: Infinity
+    };
+    const apiKey = {
+        id,
         key,
         name,
         tier,
-        created: Date.now(),
-        lastUsed: 0,
-        requests: 0,
-        cacheHits: 0,
+        requestsToday: 0,
+        requestsLimit: limits[tier],
+        createdAt: Date.now(),
+        lastUsed: Date.now(),
         active: true
-    });
-    return key;
+    };
+    apiKeys.set(key, apiKey);
+    return apiKey;
 }
 // Validate API key
 function validateAPIKey(key) {
-    const keyData = apiKeys.get(key);
-    if (!keyData) {
+    const apiKey = apiKeys.get(key);
+    if (!apiKey) {
         return { valid: false, error: 'Invalid API key' };
     }
-    if (!keyData.active) {
-        return { valid: false, error: 'API key has been revoked' };
+    if (!apiKey.active) {
+        return { valid: false, error: 'API key is disabled' };
     }
-    // Update usage stats
-    keyData.lastUsed = Date.now();
-    keyData.requests++;
-    return { valid: true, keyData, tier: keyData.tier };
+    if (apiKey.requestsToday >= apiKey.requestsLimit) {
+        return { valid: false, error: 'Rate limit exceeded' };
+    }
+    // Update last used
+    apiKey.lastUsed = Date.now();
+    return { valid: true, apiKey };
 }
-// Get all keys (for admin)
-function getAllKeys() {
+// Record request
+function recordRequest(key) {
+    const apiKey = apiKeys.get(key);
+    if (apiKey) {
+        apiKey.requestsToday++;
+    }
+}
+// Get all keys
+function getAllAPIKeys() {
     return Array.from(apiKeys.values());
 }
-// Revoke a key
+// Get key by key string
+function getAPIKey(key) {
+    return apiKeys.get(key);
+}
+// Revoke key
 function revokeAPIKey(key) {
-    const keyData = apiKeys.get(key);
-    if (!keyData)
-        return false;
-    keyData.active = false;
-    return true;
+    const apiKey = apiKeys.get(key);
+    if (apiKey) {
+        apiKey.active = false;
+        return true;
+    }
+    return false;
 }
-// Delete a key
-function deleteAPIKey(key) {
-    return apiKeys.delete(key);
+// Reset daily limits (called at midnight)
+function resetDailyLimits() {
+    for (const apiKey of apiKeys.values()) {
+        apiKey.requestsToday = 0;
+    }
+    console.log('🔄 Daily request limits reset');
 }
-// Get key stats
-function getKeyStats(key) {
-    return apiKeys.get(key) || null;
-}
-// Initialize with a default key for testing
+// Initialize with a demo key if none exist
 if (apiKeys.size === 0) {
-    generateAPIKey('Development');
+    generateAPIKey('Demo Key', 'free');
+    console.log('🔑 Demo API key created');
 }
 //# sourceMappingURL=apiKeys.js.map

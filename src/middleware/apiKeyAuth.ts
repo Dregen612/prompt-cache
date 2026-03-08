@@ -1,6 +1,6 @@
 // API Key Authentication Middleware
 import { Request, Response, NextFunction } from 'express';
-import { validateAPIKey, APIKey } from '../services/apiKeys';
+import { validateAPIKey, recordRequest, APIKey } from '../services/apiKeys';
 
 declare global {
   namespace Express {
@@ -23,8 +23,9 @@ export function apiKeyAuth(req: Request, res: Response, next: NextFunction) {
     return res.status(401).json({ error: result.error });
   }
   
-  // Attach API key to request
-  req.apiKey = result.keyData;
+  // Attach API key to request and record usage
+  req.apiKey = result.apiKey;
+  recordRequest(key);
   
   next();
 }
@@ -36,7 +37,8 @@ export function optionalApiKeyAuth(req: Request, res: Response, next: NextFuncti
   if (key) {
     const result = validateAPIKey(key);
     if (result.valid) {
-      req.apiKey = result.keyData;
+      req.apiKey = result.apiKey;
+      recordRequest(key);
     }
   }
   

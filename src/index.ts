@@ -557,6 +557,95 @@ app.get('/subscription/:apiKey', async (req, res) => {
   res.json({ tier: 'free', requestsRemaining: 1000 });
 });
 
+// ===== API Key Management =====
+
+// Generate new API key
+app.post('/keys', async (req, res) => {
+  const { name, tier = 'free' } = req.body;
+  
+  if (!name) {
+    return res.status(400).json({ error: 'name required' });
+  }
+  
+  if (!['free', 'pro', 'enterprise'].includes(tier)) {
+    return res.status(400).json({ error: 'Invalid tier. Use free, pro, or enterprise' });
+  }
+  
+  const { generateAPIKey } = await import('./services/apiKeys.js');
+  const apiKey = generateAPIKey(name, tier);
+  
+  res.json({
+    success: true,
+    id: apiKey.id,
+    key: apiKey.key,
+    name: apiKey.name,
+    tier: apiKey.tier,
+    requestsLimit: apiKey.requestsLimit,
+    createdAt: new Date(apiKey.createdAt).toISOString()
+  });
+});
+
+// List all API keys
+app.get('/keys', async (req, res) => {
+  const { getAllAPIKeys } = await import('./services/apiKeys.js');
+  const keys = getAllAPIKeys();
+  
+  res.json({
+    total: keys.length,
+    keys: keys.map(k => ({
+      id: k.id,
+      name: k.name,
+      tier: k.tier,
+      requestsToday: k.requestsToday,
+      requestsLimit: k.requestsLimit,
+      createdAt: new Date(k.createdAt).toISOString(),
+      lastUsed: new Date(k.lastUsed).toISOString(),
+      active: k.active
+    }))
+  });
+});
+
+// Revoke an API key
+app.delete('/keys/:keyId', async (req, res) => {
+  const { keyId } = req.params;
+  const { getAllAPIKeys, revokeAPIKey } = await import('./services/apiKeys.js');
+  
+  const keys = getAllAPIKeys();
+  const keyObj = keys.find(k => k.id === keyId);
+  
+  if (!keyObj) {
+    return res.status(404).json({ error: 'API key not found' });
+  }
+  
+  const revoked = revokeAPIKey(keyObj.key);
+  
+  res.json({ success: revoked, keyId, name: keyObj.name });
+});
+
+// Get specific API key details
+app.get('/keys/:keyId', async (req, res) => {
+  const { keyId } = req.params;
+  const { getAllAPIKeys } = await import('./services/apiKeys.js');
+  
+  const keys = getAllAPIKeys();
+  const keyObj = keys.find(k => k.id === keyId);
+  
+  if (!keyObj) {
+    return res.status(404).json({ error: 'API key not found' });
+  }
+  
+  res.json({
+    id: keyObj.id,
+    name: keyObj.name,
+    tier: keyObj.tier,
+    requestsToday: keyObj.requestsToday,
+    requestsLimit: keyObj.requestsLimit,
+    createdAt: new Date(keyObj.createdAt).toISOString(),
+    lastUsed: new Date(keyObj.lastUsed).toISOString(),
+    active: keyObj.active
+  });
+});
+
 // Serve static files
 app.use(express.static('.'));
 const CLEANUP_INTERVAL = 5 * 60 * 1000;

@@ -42,6 +42,8 @@ const crypto_1 = __importDefault(require("crypto"));
 const stripe_1 = __importDefault(require("stripe"));
 const pgCache_1 = require("./services/pgCache");
 const apiKeyAuth_1 = require("./middleware/apiKeyAuth");
+const rateLimit_1 = require("./middleware/rateLimit");
+const usageLimits_1 = require("./services/usageLimits");
 // Stripe setup
 const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder', {
     apiVersion: '2026-02-25.clover',
@@ -112,8 +114,13 @@ app.get('/health', async (req, res) => {
         }
     });
 });
-// Cache a prompt with TTL
-app.post('/cache', async (req, res) => {
+// Cache a prompt with TTL (rate limited: 100 req/min)
+app.post('/cache', (0, rateLimit_1.rateLimiter)({ windowMs: 60000, maxRequests: 100 }), async (req, res) => {
+    const apiKey = req.headers['x-api-key'];
+    const usage = apiKey ? (0, usageLimits_1.recordRequest)(apiKey, false) : { allowed: true, remaining: -1, tier: 'free' };
+    if (!usage.allowed) {
+        return res.status(429).json({ error: 'Daily limit exceeded', tier: usage.tier, remaining: 0 });
+    }
     const { prompt, response, model, ttl = 3600000 } = req.body;
     if (!prompt || !response) {
         return res.status(400).json({ error: 'prompt and response required' });
@@ -300,8 +307,9 @@ app.get('/cache/batch', apiKeyAuth_1.optionalApiKeyAuth, async (req, res) => {
         backend: getBackend()
     });
 });
-// Get cached prompt
-app.get('/cache/:prompt(*)', async (req, res) => {
+// Get cached prompt (rate limited: 200 req/min)
+app.get('/cache/:prompt(*)', (0, rateLimit_1.rateLimiter)({ windowMs: 60000, maxRequests: 200 }), async (req, res) => {
+    const apiKey = req.headers['x-api-key'];
     const key = hashPrompt(req.params.prompt);
     let entry = null;
     // Try PostgreSQL first
@@ -414,6 +422,24 @@ app.get('/stats', async (req, res) => {
         stats.memory = { entries: memoryCache.size, totalHits };
     }
     res.json(stats);
+});
+// Get usage stats for an API key
+app.get('/usage/:apiKey', apiKeyAuth_1.optionalApiKeyAuth, async (req, res) => {
+    const { apiKey } = req.params;
+    if (!apiKey) {
+        return res.status(400).json({ error: 'API key required' });
+    }
+    const stats = (0, usageLimits_1.getUsageStats)(apiKey);
+    const tierInfo = usageLimits_1.TIERS[stats.tier] || usageLimits_1.TIERS.free;
+    res.json({
+        apiKey: apiKey.slice(0, 8) + '...',
+        ...stats,
+        tierLimit: tierInfo.requestsPerDay,
+        features: {
+            semanticSearch: tierInfo.semanticSearch,
+            maxCacheSize: tierInfo.cacheSize
+        }
+    });
 });
 // Detailed analytics
 app.get('/analytics', async (req, res) => {

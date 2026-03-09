@@ -1,1 +1,1 @@
-{"version":3,"file":"analytics.d.ts","sourceRoot":"","sources":["../src/analytics.tsx"],"names":[],"mappings":"AACA,wBAAgB,kBAAkB,QAqFjC"}
+{"version":3,"file":"analytics.d.ts","sourceRoot":"","sources":["../src/analytics.ts"],"names":[],"mappings":"AAGA,QAAA,MAAM,MAAM,4CAAW,CAAC;AAyBxB,eAAe,MAAM,CAAC"}

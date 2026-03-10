@@ -44,6 +44,7 @@ const pgCache_1 = require("./services/pgCache");
 const apiKeyAuth_1 = require("./middleware/apiKeyAuth");
 const rateLimit_1 = require("./middleware/rateLimit");
 const usageLimits_1 = require("./services/usageLimits");
+const analytics_1 = require("./services/analytics");
 // Stripe setup
 const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder', {
     apiVersion: '2026-02-25.clover',
@@ -307,8 +308,127 @@ app.get('/cache/batch', apiKeyAuth_1.optionalApiKeyAuth, async (req, res) => {
         backend: getBackend()
     });
 });
+// Clear cache by model
+app.delete('/cache/model/:model', async (req, res) => {
+    const { model } = req.params;
+    if (!model) {
+        return res.status(400).json({ error: 'model parameter required' });
+    }
+    let cleared = 0;
+    if ((0, pgCache_1.isPgAvailable)()) {
+        cleared = await (0, pgCache_1.pgClearByModel)(model);
+    }
+    else if (useRedis && redis) {
+        try {
+            const keys = await redis.keys(`prompt:*`);
+            let deleted = 0;
+            for (const key of keys) {
+                const data = await redis.get(key);
+                if (data) {
+                    const entry = JSON.parse(data);
+                    if (entry.model === model) {
+                        await redis.del(key);
+                        deleted++;
+                    }
+                }
+            }
+            cleared = deleted;
+        }
+        catch { }
+    }
+    else {
+        for (const [key, entry] of memoryCache.entries()) {
+            if (entry.model === model) {
+                memoryCache.delete(key);
+                cleared++;
+            }
+        }
+    }
+    res.json({ success: true, model, cleared });
+});
+// List all cache keys
+app.get('/cache/keys', async (req, res) => {
+    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+    const offset = parseInt(req.query.offset) || 0;
+    let keys = [];
+    let backend = 'memory';
+    if ((0, pgCache_1.isPgAvailable)()) {
+        keys = await (0, pgCache_1.pgGetKeys)(limit, offset);
+        backend = 'pg';
+    }
+    else if (useRedis && redis) {
+        try {
+            const allKeys = await redis.keys('prompt:*');
+            const paginatedKeys = allKeys.slice(offset, offset + limit);
+            for (const k of paginatedKeys) {
+                const data = await redis.get(k);
+                if (data) {
+                    const entry = JSON.parse(data);
+                    keys.push({
+                        key: k.replace('prompt:', ''),
+                        model: entry.model,
+                        hits: entry.hits,
+                        createdAt: entry.createdAt,
+                        ttl: entry.ttl
+                    });
+                }
+            }
+            backend = 'redis';
+        }
+        catch { }
+    }
+    else {
+        let i = 0;
+        for (const [key, entry] of memoryCache) {
+            if (i >= offset && i < offset + limit) {
+                keys.push({ key, model: entry.model, hits: entry.hits, createdAt: entry.createdAt, ttl: entry.ttl });
+            }
+            i++;
+        }
+        backend = 'memory';
+    }
+    res.json({ keys, backend, limit, offset, count: keys.length });
+});
+// Get cache stats by model
+app.get('/cache/stats/by-model', async (req, res) => {
+    let stats = {};
+    let backend = getBackend();
+    if (backend === 'pg') {
+        stats = await (0, pgCache_1.pgStatsByModel)();
+    }
+    else if (backend === 'redis' && redis) {
+        try {
+            const keys = await redis.keys('prompt:*');
+            for (const key of keys) {
+                const data = await redis.get(key);
+                if (data) {
+                    const entry = JSON.parse(data);
+                    const model = entry.model || 'unknown';
+                    if (!stats[model]) {
+                        stats[model] = { count: 0, hits: 0 };
+                    }
+                    stats[model].count++;
+                    stats[model].hits += entry.hits || 0;
+                }
+            }
+        }
+        catch { }
+    }
+    else {
+        for (const entry of memoryCache.values()) {
+            const model = entry.model || 'unknown';
+            if (!stats[model]) {
+                stats[model] = { count: 0, hits: 0 };
+            }
+            stats[model].count++;
+            stats[model].hits += entry.hits || 0;
+        }
+    }
+    res.json({ stats, backend });
+});
 // Get cached prompt (rate limited: 200 req/min)
 app.get('/cache/:prompt(*)', (0, rateLimit_1.rateLimiter)({ windowMs: 60000, maxRequests: 200 }), async (req, res) => {
+    const startTime = Date.now();
     const apiKey = req.headers['x-api-key'];
     const key = hashPrompt(req.params.prompt);
     let entry = null;
@@ -318,6 +438,8 @@ app.get('/cache/:prompt(*)', (0, rateLimit_1.rateLimiter)({ windowMs: 60000, max
         if (entry) {
             entry.hits++;
             await (0, pgCache_1.pgSet)(key, entry);
+            const latency = Date.now() - startTime;
+            analytics_1.analytics.recordRequest(true, latency, entry.model);
             return res.json({
                 cached: true,
                 response: entry.response,
@@ -346,6 +468,8 @@ app.get('/cache/:prompt(*)', (0, rateLimit_1.rateLimiter)({ windowMs: 60000, max
         if ((0, pgCache_1.isPgAvailable)() && (0, pgCache_1.isVectorAvailable)()) {
             const semanticEntry = await (0, pgCache_1.pgSemanticSearch)(req.params.prompt);
             if (semanticEntry) {
+                const latency = Date.now() - startTime;
+                analytics_1.analytics.recordRequest(true, latency, semanticEntry.model);
                 return res.json({
                     cached: true,
                     semantic: true,
@@ -358,6 +482,8 @@ app.get('/cache/:prompt(*)', (0, rateLimit_1.rateLimiter)({ windowMs: 60000, max
                 });
             }
         }
+        const latency = Date.now() - startTime;
+        analytics_1.analytics.recordRequest(false, latency, req.query.model);
         return res.json({ cached: false });
     }
     // Check TTL
@@ -371,6 +497,8 @@ app.get('/cache/:prompt(*)', (0, rateLimit_1.rateLimiter)({ windowMs: 60000, max
         else {
             memoryCache.delete(key);
         }
+        const latency = Date.now() - startTime;
+        analytics_1.analytics.recordRequest(false, latency, entry.model);
         return res.json({ cached: false, expired: true });
     }
     entry.hits++;
@@ -384,6 +512,8 @@ app.get('/cache/:prompt(*)', (0, rateLimit_1.rateLimiter)({ windowMs: 60000, max
     else {
         memoryCache.set(key, entry);
     }
+    const latency = Date.now() - startTime;
+    analytics_1.analytics.recordRequest(true, latency, entry.model);
     res.json({
         cached: true,
         response: entry.response,
@@ -443,30 +573,9 @@ app.get('/usage/:apiKey', apiKeyAuth_1.optionalApiKeyAuth, async (req, res) => {
 });
 // Detailed analytics
 app.get('/analytics', async (req, res) => {
-    const backend = getBackend();
-    const now = Date.now();
-    // Simulate activity data (in production, track this in DB)
-    const analytics = {
-        period: '24h',
-        totalRequests: Math.floor(Math.random() * 1000) + 500,
-        cacheHits: Math.floor(Math.random() * 800) + 200,
-        cacheMisses: Math.floor(Math.random() * 200) + 50,
-        avgLatency: Math.floor(Math.random() * 200) + 50,
-        tokensSaved: Math.floor(Math.random() * 50000) + 10000,
-        costSaved: Math.floor(Math.random() * 10) + 2,
-        topModels: [
-            { model: 'gpt-4o-mini', requests: Math.floor(Math.random() * 500) },
-            { model: 'claude-3-haiku', requests: Math.floor(Math.random() * 300) },
-            { model: 'gemini-1.5-flash', requests: Math.floor(Math.random() * 200) },
-        ],
-        hourlyRequests: Array.from({ length: 24 }, (_, i) => ({
-            hour: i,
-            requests: Math.floor(Math.random() * 100)
-        })),
-        hitRate: 0,
-    };
-    analytics.hitRate = Math.round((analytics.cacheHits / analytics.totalRequests) * 100);
-    res.json(analytics);
+    const period = req.query.period || '24h';
+    const data = analytics_1.analytics.getAnalytics(period);
+    res.json(data);
 });
 // Clear cache
 app.delete('/cache', async (req, res) => {
@@ -497,6 +606,124 @@ app.delete('/cache/:prompt(*)', async (req, res) => {
     memoryCache.delete(key);
     res.json({ success: true, key });
 });
+// Clear cache by model
+app.delete('/cache/model/:model', async (req, res) => {
+    const { model } = req.params;
+    if (!model) {
+        return res.status(400).json({ error: 'model parameter required' });
+    }
+    let cleared = 0;
+    if ((0, pgCache_1.isPgAvailable)()) {
+        cleared = await (0, pgCache_1.pgClearByModel)(model);
+    }
+    else if (useRedis && redis) {
+        try {
+            const keys = await redis.keys(`prompt:*`);
+            let deleted = 0;
+            for (const key of keys) {
+                const data = await redis.get(key);
+                if (data) {
+                    const entry = JSON.parse(data);
+                    if (entry.model === model) {
+                        await redis.del(key);
+                        deleted++;
+                    }
+                }
+            }
+            cleared = deleted;
+        }
+        catch { }
+    }
+    else {
+        for (const [key, entry] of memoryCache.entries()) {
+            if (entry.model === model) {
+                memoryCache.delete(key);
+                cleared++;
+            }
+        }
+    }
+    res.json({ success: true, model, cleared });
+});
+// List all cache keys
+app.get('/cache/keys', async (req, res) => {
+    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+    const offset = parseInt(req.query.offset) || 0;
+    let keys = [];
+    let backend = 'memory';
+    if ((0, pgCache_1.isPgAvailable)()) {
+        keys = await (0, pgCache_1.pgGetKeys)(limit, offset);
+        backend = 'pg';
+    }
+    else if (useRedis && redis) {
+        try {
+            const allKeys = await redis.keys('prompt:*');
+            const paginatedKeys = allKeys.slice(offset, offset + limit);
+            for (const k of paginatedKeys) {
+                const data = await redis.get(k);
+                if (data) {
+                    const entry = JSON.parse(data);
+                    keys.push({
+                        key: k.replace('prompt:', ''),
+                        model: entry.model,
+                        hits: entry.hits,
+                        createdAt: entry.createdAt,
+                        ttl: entry.ttl
+                    });
+                }
+            }
+            backend = 'redis';
+        }
+        catch { }
+    }
+    else {
+        let i = 0;
+        for (const [key, entry] of memoryCache) {
+            if (i >= offset && i < offset + limit) {
+                keys.push({ key, model: entry.model, hits: entry.hits, createdAt: entry.createdAt, ttl: entry.ttl });
+            }
+            i++;
+        }
+        backend = 'memory';
+    }
+    res.json({ keys, backend, limit, offset, count: keys.length });
+});
+// Get cache stats by model
+app.get('/cache/stats/by-model', async (req, res) => {
+    let stats = {};
+    let backend = getBackend();
+    if (backend === 'pg') {
+        stats = await (0, pgCache_1.pgStatsByModel)();
+    }
+    else if (backend === 'redis' && redis) {
+        try {
+            const keys = await redis.keys('prompt:*');
+            for (const key of keys) {
+                const data = await redis.get(key);
+                if (data) {
+                    const entry = JSON.parse(data);
+                    const model = entry.model || 'unknown';
+                    if (!stats[model]) {
+                        stats[model] = { count: 0, hits: 0 };
+                    }
+                    stats[model].count++;
+                    stats[model].hits += entry.hits || 0;
+                }
+            }
+        }
+        catch { }
+    }
+    else {
+        for (const entry of memoryCache.values()) {
+            const model = entry.model || 'unknown';
+            if (!stats[model]) {
+                stats[model] = { count: 0, hits: 0 };
+            }
+            stats[model].count++;
+            stats[model].hits += entry.hits || 0;
+        }
+    }
+    res.json({ stats, backend });
+});
 // Stripe checkout session
 app.post('/checkout', async (req, res) => {
     const { tier, customerId, email } = req.body;
@@ -523,6 +750,88 @@ app.get('/subscription/:apiKey', async (req, res) => {
     // In production, look up the API key in database and return subscription status
     // For now, return demo status
     res.json({ tier: 'free', requestsRemaining: 1000 });
+});
+// ===== API Key Management =====
+// Generate new API key
+app.post('/keys', async (req, res) => {
+    const { name, tier = 'free' } = req.body;
+    if (!name) {
+        return res.status(400).json({ error: 'name required' });
+    }
+    if (!['free', 'pro', 'enterprise'].includes(tier)) {
+        return res.status(400).json({ error: 'Invalid tier. Use free, pro, or enterprise' });
+    }
+    const { generateAPIKey } = await Promise.resolve().then(() => __importStar(require('./services/apiKeys.js')));
+    const apiKey = generateAPIKey(name, tier);
+    res.json({
+        success: true,
+        id: apiKey.id,
+        key: apiKey.key,
+        name: apiKey.name,
+        tier: apiKey.tier,
+        requestsLimit: apiKey.requestsLimit,
+        createdAt: new Date(apiKey.createdAt).toISOString()
+    });
+});
+// List all API keys
+app.get('/keys', async (req, res) => {
+    const { getAllAPIKeys } = await Promise.resolve().then(() => __importStar(require('./services/apiKeys.js')));
+    const keys = getAllAPIKeys();
+    res.json({
+        total: keys.length,
+        keys: keys.map(k => ({
+            id: k.id,
+            name: k.name,
+            tier: k.tier,
+            requestsToday: k.requestsToday,
+            requestsLimit: k.requestsLimit,
+            createdAt: new Date(k.createdAt).toISOString(),
+            lastUsed: new Date(k.lastUsed).toISOString(),
+            active: k.active
+        }))
+    });
+});
+// Revoke an API key
+app.delete('/keys/:keyId', async (req, res) => {
+    const { keyId } = req.params;
+    const { getAllAPIKeys, revokeAPIKey } = await Promise.resolve().then(() => __importStar(require('./services/apiKeys.js')));
+    const keys = getAllAPIKeys();
+    const keyObj = keys.find(k => k.id === keyId);
+    if (!keyObj) {
+        return res.status(404).json({ error: 'API key not found' });
+    }
+    const revoked = revokeAPIKey(keyObj.key);
+    res.json({ success: revoked, keyId, name: keyObj.name });
+});
+// Get specific API key details
+app.get('/keys/:keyId', async (req, res) => {
+    const { keyId } = req.params;
+    const { getAllAPIKeys } = await Promise.resolve().then(() => __importStar(require('./services/apiKeys.js')));
+    const keys = getAllAPIKeys();
+    const keyObj = keys.find(k => k.id === keyId);
+    if (!keyObj) {
+        return res.status(404).json({ error: 'API key not found' });
+    }
+    res.json({
+        id: keyObj.id,
+        name: keyObj.name,
+        tier: keyObj.tier,
+        requestsToday: keyObj.requestsToday,
+        requestsLimit: keyObj.requestsLimit,
+        createdAt: new Date(keyObj.createdAt).toISOString(),
+        lastUsed: new Date(keyObj.lastUsed).toISOString(),
+        active: keyObj.active
+    });
+});
+const path_1 = __importDefault(require("path"));
+app.get('/', (req, res) => {
+    res.sendFile(path_1.default.join(__dirname, '..', 'landing.html'));
+});
+app.get('/dashboard', (req, res) => {
+    res.sendFile(path_1.default.join(__dirname, '..', 'dashboard.html'));
+});
+app.get('/analytics', (req, res) => {
+    res.sendFile(path_1.default.join(__dirname, '..', 'analytics.html'));
 });
 // Serve static files
 app.use(express_1.default.static('.'));

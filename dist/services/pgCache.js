@@ -10,6 +10,9 @@ exports.pgDel = pgDel;
 exports.pgClear = pgClear;
 exports.pgStats = pgStats;
 exports.pgCleanup = pgCleanup;
+exports.pgClearByModel = pgClearByModel;
+exports.pgGetKeys = pgGetKeys;
+exports.pgStatsByModel = pgStatsByModel;
 const pg_1 = require("pg");
 const pool = new pg_1.Pool({
     connectionString: process.env.DATABASE_URL || 'postgresql://adamwallace@/openclaw_memory?host=/tmp',
@@ -182,6 +185,55 @@ async function pgCleanup() {
     }
     catch {
         return 0;
+    }
+}
+// Clear cache by model (useful when model updates)
+async function pgClearByModel(model) {
+    if (!pgAvailable)
+        return 0;
+    try {
+        const result = await pool.query('DELETE FROM prompt_cache WHERE model = $1', [model]);
+        return result.rowCount || 0;
+    }
+    catch {
+        return 0;
+    }
+}
+// Get all cache keys with metadata (for listing)
+async function pgGetKeys(limit = 100, offset = 0) {
+    if (!pgAvailable)
+        return [];
+    try {
+        const result = await pool.query('SELECT key, model, hits, created_at, ttl FROM prompt_cache ORDER BY hits DESC LIMIT $1 OFFSET $2', [limit, offset]);
+        return result.rows.map(row => ({
+            key: row.key,
+            model: row.model,
+            hits: row.hits,
+            createdAt: row.created_at,
+            ttl: row.ttl,
+        }));
+    }
+    catch {
+        return [];
+    }
+}
+// Get cache size by model
+async function pgStatsByModel() {
+    if (!pgAvailable)
+        return {};
+    try {
+        const result = await pool.query('SELECT model, COUNT(*) as cnt, COALESCE(SUM(hits), 0) as hits FROM prompt_cache GROUP BY model');
+        const stats = {};
+        for (const row of result.rows) {
+            stats[row.model] = {
+                count: parseInt(row.cnt),
+                hits: parseInt(row.hits),
+            };
+        }
+        return stats;
+    }
+    catch {
+        return {};
     }
 }
 //# sourceMappingURL=pgCache.js.map

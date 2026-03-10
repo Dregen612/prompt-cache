@@ -19,4 +19,16 @@ export declare function pgStats(): Promise<{
     totalHits: number;
 }>;
 export declare function pgCleanup(): Promise<number>;
+export declare function pgClearByModel(model: string): Promise<number>;
+export declare function pgGetKeys(limit?: number, offset?: number): Promise<Array<{
+    key: string;
+    model: string;
+    hits: number;
+    createdAt: number;
+    ttl: number;
+}>>;
+export declare function pgStatsByModel(): Promise<Record<string, {
+    count: number;
+    hits: number;
+}>>;
 //# sourceMappingURL=pgCache.d.ts.map

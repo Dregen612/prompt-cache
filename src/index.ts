@@ -2,10 +2,11 @@ import express from 'express';
 import Redis from 'ioredis';
 import crypto from 'crypto';
 import Stripe from 'stripe';
-import { initPgCache, isPgAvailable, isVectorAvailable, pgSet, pgGet, pgDel, pgClear, pgStats, pgCleanup, pgSemanticSearch, CacheEntry } from './services/pgCache';
+import { initPgCache, isPgAvailable, isVectorAvailable, pgSet, pgGet, pgDel, pgClear, pgStats, pgCleanup, pgSemanticSearch, pgClearByModel, pgGetKeys, pgStatsByModel, CacheEntry } from './services/pgCache';
 import { apiKeyAuth, optionalApiKeyAuth } from './middleware/apiKeyAuth';
 import { rateLimiter } from './middleware/rateLimit';
 import { recordRequest, getUsageStats, TIERS } from './services/usageLimits';
+import { analytics } from './services/analytics';
 
 // Stripe setup
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder', {
@@ -317,8 +318,130 @@ app.get('/cache/batch', optionalApiKeyAuth, async (req, res) => {
   });
 });
 
+// Clear cache by model
+app.delete('/cache/model/:model', async (req, res) => {
+  const { model } = req.params;
+  
+  if (!model) {
+    return res.status(400).json({ error: 'model parameter required' });
+  }
+  
+  let cleared = 0;
+  
+  if (isPgAvailable()) {
+    cleared = await pgClearByModel(model);
+  } else if (useRedis && redis) {
+    try {
+      const keys = await redis.keys(`prompt:*`);
+      let deleted = 0;
+      for (const key of keys) {
+        const data = await redis.get(key);
+        if (data) {
+          const entry = JSON.parse(data);
+          if (entry.model === model) {
+            await redis.del(key);
+            deleted++;
+          }
+        }
+      }
+      cleared = deleted;
+    } catch {}
+  } else {
+    for (const [key, entry] of memoryCache.entries()) {
+      if (entry.model === model) {
+        memoryCache.delete(key);
+        cleared++;
+      }
+    }
+  }
+  
+  res.json({ success: true, model, cleared });
+});
+
+// List all cache keys
+app.get('/cache/keys', async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit as string) || 100, 1000);
+  const offset = parseInt(req.query.offset as string) || 0;
+  
+  let keys: Array<{key: string; model: string; hits: number; createdAt: number; ttl: number}> = [];
+  let backend = 'memory';
+  
+  if (isPgAvailable()) {
+    keys = await pgGetKeys(limit, offset);
+    backend = 'pg';
+  } else if (useRedis && redis) {
+    try {
+      const allKeys = await redis.keys('prompt:*');
+      const paginatedKeys = allKeys.slice(offset, offset + limit);
+      for (const k of paginatedKeys) {
+        const data = await redis.get(k);
+        if (data) {
+          const entry = JSON.parse(data);
+          keys.push({
+            key: k.replace('prompt:', ''),
+            model: entry.model,
+            hits: entry.hits,
+            createdAt: entry.createdAt,
+            ttl: entry.ttl
+          });
+        }
+      }
+      backend = 'redis';
+    } catch {}
+  } else {
+    let i = 0;
+    for (const [key, entry] of memoryCache) {
+      if (i >= offset && i < offset + limit) {
+        keys.push({ key, model: entry.model, hits: entry.hits, createdAt: entry.createdAt, ttl: entry.ttl });
+      }
+      i++;
+    }
+    backend = 'memory';
+  }
+  
+  res.json({ keys, backend, limit, offset, count: keys.length });
+});
+
+// Get cache stats by model
+app.get('/cache/stats/by-model', async (req, res) => {
+  let stats: Record<string, { count: number; hits: number }> = {};
+  let backend = getBackend();
+  
+  if (backend === 'pg') {
+    stats = await pgStatsByModel();
+  } else if (backend === 'redis' && redis) {
+    try {
+      const keys = await redis.keys('prompt:*');
+      for (const key of keys) {
+        const data = await redis.get(key);
+        if (data) {
+          const entry = JSON.parse(data);
+          const model = entry.model || 'unknown';
+          if (!stats[model]) {
+            stats[model] = { count: 0, hits: 0 };
+          }
+          stats[model].count++;
+          stats[model].hits += entry.hits || 0;
+        }
+      }
+    } catch {}
+  } else {
+    for (const entry of memoryCache.values()) {
+      const model = entry.model || 'unknown';
+      if (!stats[model]) {
+        stats[model] = { count: 0, hits: 0 };
+      }
+      stats[model].count++;
+      stats[model].hits += entry.hits || 0;
+    }
+  }
+  
+  res.json({ stats, backend });
+});
+
 // Get cached prompt (rate limited: 200 req/min)
 app.get('/cache/:prompt(*)', rateLimiter({ windowMs: 60000, maxRequests: 200 }), async (req, res) => {
+  const startTime = Date.now();
   const apiKey = req.headers['x-api-key'] as string;
   const key = hashPrompt(req.params.prompt);
   
@@ -330,6 +453,8 @@ app.get('/cache/:prompt(*)', rateLimiter({ windowMs: 60000, maxRequests: 200 }),
     if (entry) {
       entry.hits++;
       await pgSet(key, entry);
+      const latency = Date.now() - startTime;
+      analytics.recordRequest(true, latency, entry.model);
       return res.json({ 
         cached: true, 
         response: entry.response, 
@@ -358,6 +483,8 @@ app.get('/cache/:prompt(*)', rateLimiter({ windowMs: 60000, maxRequests: 200 }),
     if (isPgAvailable() && isVectorAvailable()) {
       const semanticEntry = await pgSemanticSearch(req.params.prompt);
       if (semanticEntry) {
+        const latency = Date.now() - startTime;
+        analytics.recordRequest(true, latency, semanticEntry.model);
         return res.json({
           cached: true,
           semantic: true,
@@ -370,6 +497,8 @@ app.get('/cache/:prompt(*)', rateLimiter({ windowMs: 60000, maxRequests: 200 }),
         });
       }
     }
+    const latency = Date.now() - startTime;
+    analytics.recordRequest(false, latency, req.query.model as string);
     return res.json({ cached: false });
   }
 
@@ -382,6 +511,8 @@ app.get('/cache/:prompt(*)', rateLimiter({ windowMs: 60000, maxRequests: 200 }),
     } else {
       memoryCache.delete(key);
     }
+    const latency = Date.now() - startTime;
+    analytics.recordRequest(false, latency, entry.model);
     return res.json({ cached: false, expired: true });
   }
 
@@ -396,6 +527,8 @@ app.get('/cache/:prompt(*)', rateLimiter({ windowMs: 60000, maxRequests: 200 }),
     memoryCache.set(key, entry);
   }
 
+  const latency = Date.now() - startTime;
+  analytics.recordRequest(true, latency, entry.model);
   res.json({ 
     cached: true, 
     response: entry.response, 
@@ -460,33 +593,9 @@ app.get('/usage/:apiKey', optionalApiKeyAuth, async (req, res) => {
 
 // Detailed analytics
 app.get('/analytics', async (req, res) => {
-  const backend = getBackend();
-  const now = Date.now();
-  
-  // Simulate activity data (in production, track this in DB)
-  const analytics = {
-    period: '24h',
-    totalRequests: Math.floor(Math.random() * 1000) + 500,
-    cacheHits: Math.floor(Math.random() * 800) + 200,
-    cacheMisses: Math.floor(Math.random() * 200) + 50,
-    avgLatency: Math.floor(Math.random() * 200) + 50,
-    tokensSaved: Math.floor(Math.random() * 50000) + 10000,
-    costSaved: Math.floor(Math.random() * 10) + 2,
-    topModels: [
-      { model: 'gpt-4o-mini', requests: Math.floor(Math.random() * 500) },
-      { model: 'claude-3-haiku', requests: Math.floor(Math.random() * 300) },
-      { model: 'gemini-1.5-flash', requests: Math.floor(Math.random() * 200) },
-    ],
-    hourlyRequests: Array.from({length: 24}, (_, i) => ({
-      hour: i,
-      requests: Math.floor(Math.random() * 100)
-    })),
-    hitRate: 0,
-  };
-  
-  analytics.hitRate = Math.round((analytics.cacheHits / analytics.totalRequests) * 100);
-  
-  res.json(analytics);
+  const period = (req.query.period as '1h' | '24h' | '7d' | '30d') || '24h';
+  const data = analytics.getAnalytics(period);
+  res.json(data);
 });
 
 // Clear cache
@@ -518,6 +627,127 @@ app.delete('/cache/:prompt(*)', async (req, res) => {
   memoryCache.delete(key);
   
   res.json({ success: true, key });
+});
+
+// Clear cache by model
+app.delete('/cache/model/:model', async (req, res) => {
+  const { model } = req.params;
+  
+  if (!model) {
+    return res.status(400).json({ error: 'model parameter required' });
+  }
+  
+  let cleared = 0;
+  
+  if (isPgAvailable()) {
+    cleared = await pgClearByModel(model);
+  } else if (useRedis && redis) {
+    try {
+      const keys = await redis.keys(`prompt:*`);
+      let deleted = 0;
+      for (const key of keys) {
+        const data = await redis.get(key);
+        if (data) {
+          const entry = JSON.parse(data);
+          if (entry.model === model) {
+            await redis.del(key);
+            deleted++;
+          }
+        }
+      }
+      cleared = deleted;
+    } catch {}
+  } else {
+    for (const [key, entry] of memoryCache.entries()) {
+      if (entry.model === model) {
+        memoryCache.delete(key);
+        cleared++;
+      }
+    }
+  }
+  
+  res.json({ success: true, model, cleared });
+});
+
+// List all cache keys
+app.get('/cache/keys', async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit as string) || 100, 1000);
+  const offset = parseInt(req.query.offset as string) || 0;
+  
+  let keys: Array<{key: string; model: string; hits: number; createdAt: number; ttl: number}> = [];
+  let backend = 'memory';
+  
+  if (isPgAvailable()) {
+    keys = await pgGetKeys(limit, offset);
+    backend = 'pg';
+  } else if (useRedis && redis) {
+    try {
+      const allKeys = await redis.keys('prompt:*');
+      const paginatedKeys = allKeys.slice(offset, offset + limit);
+      for (const k of paginatedKeys) {
+        const data = await redis.get(k);
+        if (data) {
+          const entry = JSON.parse(data);
+          keys.push({
+            key: k.replace('prompt:', ''),
+            model: entry.model,
+            hits: entry.hits,
+            createdAt: entry.createdAt,
+            ttl: entry.ttl
+          });
+        }
+      }
+      backend = 'redis';
+    } catch {}
+  } else {
+    let i = 0;
+    for (const [key, entry] of memoryCache) {
+      if (i >= offset && i < offset + limit) {
+        keys.push({ key, model: entry.model, hits: entry.hits, createdAt: entry.createdAt, ttl: entry.ttl });
+      }
+      i++;
+    }
+    backend = 'memory';
+  }
+  
+  res.json({ keys, backend, limit, offset, count: keys.length });
+});
+
+// Get cache stats by model
+app.get('/cache/stats/by-model', async (req, res) => {
+  let stats: Record<string, { count: number; hits: number }> = {};
+  let backend = getBackend();
+  
+  if (backend === 'pg') {
+    stats = await pgStatsByModel();
+  } else if (backend === 'redis' && redis) {
+    try {
+      const keys = await redis.keys('prompt:*');
+      for (const key of keys) {
+        const data = await redis.get(key);
+        if (data) {
+          const entry = JSON.parse(data);
+          const model = entry.model || 'unknown';
+          if (!stats[model]) {
+            stats[model] = { count: 0, hits: 0 };
+          }
+          stats[model].count++;
+          stats[model].hits += entry.hits || 0;
+        }
+      }
+    } catch {}
+  } else {
+    for (const entry of memoryCache.values()) {
+      const model = entry.model || 'unknown';
+      if (!stats[model]) {
+        stats[model] = { count: 0, hits: 0 };
+      }
+      stats[model].count++;
+      stats[model].hits += entry.hits || 0;
+    }
+  }
+  
+  res.json({ stats, backend });
 });
 
 // Stripe checkout session
@@ -644,6 +874,21 @@ app.get('/keys/:keyId', async (req, res) => {
     lastUsed: new Date(keyObj.lastUsed).toISOString(),
     active: keyObj.active
   });
+});
+
+// Root route - serve landing page
+import fs from 'fs';
+import path from 'path';
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'landing.html'));
+});
+
+app.get('/dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'dashboard.html'));
+});
+
+app.get('/analytics', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'analytics.html'));
 });
 
 // Serve static files

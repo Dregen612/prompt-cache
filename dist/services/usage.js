@@ -1,8 +1,8 @@
 "use strict";
+// Usage Tracking for PromptCache
+// pg client not available - using analytics.ts instead
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.usageTracker = exports.UsageTracker = void 0;
-// Usage Tracking for PromptCache
-const pgClient_1 = require("./pgClient");
 class UsageTracker {
     // Track API usage
     async track(req, res, next) {
@@ -28,51 +28,15 @@ class UsageTracker {
         next();
     }
     async store(record) {
-        try {
-            await pgClient_1.pg.query(`INSERT INTO usage (api_key, prompt, cached, latency, tokens, cost)
-         VALUES ($1, $2, $3, $4, $5, $6)`, [record.apiKey, record.prompt, record.cached, record.latency, record.tokens, record.cost]);
-        }
-        catch (e) {
-            // Silent fail - don't break API
-        }
+        // Using analytics.ts for tracking instead
     }
     // Get usage stats for an API key
     async getStats(apiKey, days = 7) {
-        try {
-            const result = await pgClient_1.pg.query(`
-        SELECT 
-          COUNT(*) as total_requests,
-          SUM(CASE WHEN cached THEN 1 ELSE 0 END) as cache_hits,
-          SUM(tokens) as total_tokens,
-          SUM(cost) as total_cost,
-          AVG(latency) as avg_latency
-        FROM usage
-        WHERE api_key = $1
-        AND timestamp > NOW() - INTERVAL '${days} days'
-      `, [apiKey]);
-            return result.rows[0];
-        }
-        catch (e) {
-            return null;
-        }
+        return null;
     }
     // Get all-time stats
     async getAllTimeStats() {
-        try {
-            const result = await pgClient_1.pg.query(`
-        SELECT 
-          COUNT(*) as total_requests,
-          SUM(CASE WHEN cached THEN 1 ELSE 0 END) as cache_hits,
-          SUM(tokens) as total_tokens,
-          SUM(cost) as total_cost,
-          COUNT(DISTINCT api_key) as unique_keys
-        FROM usage
-      `);
-            return result.rows[0];
-        }
-        catch (e) {
-            return null;
-        }
+        return null;
     }
 }
 exports.UsageTracker = UsageTracker;

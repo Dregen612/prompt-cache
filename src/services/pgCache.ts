@@ -197,3 +197,57 @@ export async function pgCleanup(): Promise<number> {
     return 0;
   }
 }
+
+// Clear cache by model (useful when model updates)
+export async function pgClearByModel(model: string): Promise<number> {
+  if (!pgAvailable) return 0;
+  try {
+    const result = await pool.query(
+      'DELETE FROM prompt_cache WHERE model = $1',
+      [model]
+    );
+    return result.rowCount || 0;
+  } catch {
+    return 0;
+  }
+}
+
+// Get all cache keys with metadata (for listing)
+export async function pgGetKeys(limit = 100, offset = 0): Promise<Array<{key: string; model: string; hits: number; createdAt: number; ttl: number}>> {
+  if (!pgAvailable) return [];
+  try {
+    const result = await pool.query(
+      'SELECT key, model, hits, created_at, ttl FROM prompt_cache ORDER BY hits DESC LIMIT $1 OFFSET $2',
+      [limit, offset]
+    );
+    return result.rows.map(row => ({
+      key: row.key,
+      model: row.model,
+      hits: row.hits,
+      createdAt: row.created_at,
+      ttl: row.ttl,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+// Get cache size by model
+export async function pgStatsByModel(): Promise<Record<string, { count: number; hits: number }>> {
+  if (!pgAvailable) return {};
+  try {
+    const result = await pool.query(
+      'SELECT model, COUNT(*) as cnt, COALESCE(SUM(hits), 0) as hits FROM prompt_cache GROUP BY model'
+    );
+    const stats: Record<string, { count: number; hits: number }> = {};
+    for (const row of result.rows) {
+      stats[row.model] = {
+        count: parseInt(row.cnt),
+        hits: parseInt(row.hits),
+      };
+    }
+    return stats;
+  } catch {
+    return {};
+  }
+}

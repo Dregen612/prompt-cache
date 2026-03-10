@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PromptCache Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg-primary: #030712;
+      --bg-secondary: #0f172a;
+      --bg-card: #1e293b;
+      --accent-primary: #6366f1;
+      --accent-secondary: #8b5cf6;
+      --accent-emerald: #10b981;
+      --accent-rose: #f43f5e;
+      --accent-amber: #f59e0b;
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Outfit', sans-serif; background: var(--bg-primary); color: var(--text-primary); }
+    
+    .glass-card {
+      background: linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.6) 100%);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(148, 163, 184, 0.1);
+      border-radius: 16px;
+    }
+    
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+      border: none;
+      border-radius: 10px;
+      padding: 12px 24px;
+      color: white;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    
+    .btn-primary:hover { box-shadow: 0 0 30px rgba(99, 102, 241, 0.4); transform: translateY(-1px); }
+    
+    .btn-danger {
+      background: linear-gradient(135deg, var(--accent-rose), #e11d48);
+      border: none;
+      border-radius: 8px;
+      padding: 8px 16px;
+      color: white;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    
+    .btn-danger:hover { box-shadow: 0 0 20px rgba(244, 63, 94, 0.4); }
+    
+    .btn-success {
+      background: linear-gradient(135deg, var(--accent-emerald), #059669);
+      border: none;
+      border-radius: 8px;
+      padding: 8px 16px;
+      color: white;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    
+    .tier-badge {
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    
+    .tier-free { background: rgba(100, 116, 139, 0.3); color: #94a3b8; }
+    .tier-pro { background: rgba(99, 102, 241, 0.3); color: #818cf8; }
+    .tier-enterprise { background: rgba(139, 92, 246, 0.3); color: #a78bfa; }
+    
+    pre { font-family: 'JetBrains Mono', monospace; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <!-- Header -->
+  <div class="border-b border-white/10">
+    <div class="max-w-7xl mx-auto px-6 py-4 flex justify-between items-center">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-xl">⚡</div>
+        <div>
+          <h1 class="text-xl font-bold">PromptCache Dashboard</h1>
+          <p class="text-xs text-gray-400">API Key Management</p>
+        </div>
+      </div>
+      <div class="flex gap-3">
+        <a href="/analytics.html" class="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 transition">Analytics</a>
+        <a href="/" class="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 transition">Home</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="max-w-7xl mx-auto px-6 py-8">
+    <!-- Stats Overview -->
+    <div class="grid grid-cols-4 gap-4 mb-8">
+      <div class="glass-card p-4">
+        <p class="text-gray-400 text-sm">Total Keys</p>
+        <p class="text-2xl font-bold" id="totalKeys">-</p>
+      </div>
+      <div class="glass-card p-4">
+        <p class="text-gray-400 text-sm">Active Keys</p>
+        <p class="text-2xl font-bold text-emerald-400" id="activeKeys">-</p>
+      </div>
+      <div class="glass-card p-4">
+        <p class="text-gray-400 text-sm">Total Requests (24h)</p>
+        <p class="text-2xl font-bold text-indigo-400" id="totalRequests">-</p>
+      </div>
+      <div class="glass-card p-4">
+        <p class="text-gray-400 text-sm">Cache Hit Rate</p>
+        <p class="text-2xl font-bold text-cyan-400" id="hitRate">-</p>
+      </div>
+    </div>
+
+    <!-- Create Key Section -->
+    <div class="glass-card p-6 mb-8">
+      <h2 class="text-lg font-semibold mb-4">Create New API Key</h2>
+      <div class="flex gap-4 items-end">
+        <div class="flex-1">
+          <label class="block text-sm text-gray-400 mb-2">Key Name</label>
+          <input type="text" id="keyName" placeholder="e.g., Production App" 
+            class="w-full px-4 py-3 rounded-lg bg-gray-800 border border-gray-700 focus:border-indigo-500 focus:outline-none">
+        </div>
+        <div class="w-48">
+          <label class="block text-sm text-gray-400 mb-2">Tier</label>
+          <select id="keyTier" class="w-full px-4 py-3 rounded-lg bg-gray-800 border border-gray-700 focus:border-indigo-500 focus:outline-none">
+            <option value="free">Free</option>
+            <option value="pro">Pro</option>
+            <option value="enterprise">Enterprise</option>
+          </select>
+        </div>
+        <button onclick="createKey()" class="btn-primary">Create Key</button>
+      </div>
+    </div>
+
+    <!-- Keys List -->
+    <div class="glass-card p-6">
+      <h2 class="text-lg font-semibold mb-4">Your API Keys</h2>
+      <div id="keysList" class="space-y-3">
+        <p class="text-gray-400">Loading...</p>
+      </div>
+    </div>
+
+    <!-- Usage Chart -->
+    <div class="glass-card p-6 mt-8">
+      <h2 class="text-lg font-semibold mb-4">Request Volume (Last 7 Days)</h2>
+      <div style="height: 200px;">
+        <canvas id="usageChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Copy Modal -->
+  <div id="copyModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div class="glass-card p-6 w-full max-w-lg">
+      <h3 class="text-lg font-semibold mb-2">API Key Created!</h3>
+      <p class="text-gray-400 text-sm mb-4">Copy this key now. You won't be able to see it again.</p>
+      <div class="flex gap-2">
+        <input type="text" id="newApiKey" readonly 
+          class="flex-1 px-4 py-3 rounded-lg bg-gray-800 border border-gray-700 font-mono text-sm">
+        <button onclick="copyKey()" class="btn-success">Copy</button>
+      </div>
+      <button onclick="document.getElementById('copyModal').classList.add('hidden')" class="mt-4 text-gray-400 text-sm hover:text-white">
+        I've saved my key
+      </button>
+    </div>
+  </div>
+
+  <script>
+    const API_URL = window.location.port === '3000' ? '' : ':3000';
+
+    // Fetch and display keys
+    async function loadKeys() {
+      try {
+        const res = await fetch(`${API_URL}/keys`);
+        const data = await res.json();
+        
+        document.getElementById('totalKeys').textContent = data.total || 0;
+        
+        const active = data.keys?.filter(k => k.active).length || 0;
+        document.getElementById('activeKeys').textContent = active;
+        
+        const keysList = document.getElementById('keysList');
+        
+        if (!data.keys || data.keys.length === 0) {
+          keysList.innerHTML = '<p class="text-gray-400 text-center py-8">No API keys yet. Create one above.</p>';
+          return;
+        }
+        
+        keysList.innerHTML = data.keys.map(key => `
+          <div class="flex items-center justify-between p-4 bg-gray-800/50 rounded-lg">
+            <div class="flex items-center gap-4">
+              <div>
+                <p class="font-medium">${key.name}</p>
+                <p class="text-xs text-gray-400 font-mono">${key.id}</p>
+                <p class="text-xs text-gray-500 mt-1">
+                  Created: ${new Date(key.createdAt).toLocaleDateString()} • 
+                  Last used: ${key.lastUsed ? new Date(key.lastUsed).toLocaleDateString() : 'Never'}
+                </p>
+              </div>
+              <span class="tier-badge tier-${key.tier}">${key.tier}</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="text-sm text-gray-400">
+                ${key.requestsToday || 0} / ${key.requestsLimit?.toLocaleString() || '∞'} today
+              </span>
+              ${key.active 
+                ? `<button onclick="revokeKey('${key.id}')" class="btn-danger text-sm">Revoke</button>`
+                : `<span class="text-xs text-red-400">Revoked</span>`
+              }
+            </div>
+          </div>
+        `).join('');
+        
+      } catch (e) {
+        console.error(e);
+        document.getElementById('keysList').innerHTML = '<p class="text-red-400">Error loading keys</p>';
+      }
+    }
+
+    // Create new key
+    async function createKey() {
+      const name = document.getElementById('keyName').value;
+      const tier = document.getElementById('keyTier').value;
+      
+      if (!name) {
+        alert('Please enter a key name');
+        return;
+      }
+      
+      try {
+        const res = await fetch(`${API_URL}/keys`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, tier })
+        });
+        
+        const data = await res.json();
+        
+        if (data.key) {
+          document.getElementById('newApiKey').value = data.key;
+          document.getElementById('copyModal').classList.remove('hidden');
+          document.getElementById('keyName').value = '';
+          loadKeys();
+        } else {
+          alert('Error creating key: ' + (data.error || 'Unknown error'));
+        }
+      } catch (e) {
+        alert('Error creating key');
+      }
+    }
+
+    // Copy key to clipboard
+    async function copyKey() {
+      const input = document.getElementById('newApiKey');
+      input.select();
+      document.execCommand('copy');
+      alert('Copied!');
+    }
+
+    // Revoke key
+    async function revokeKey(keyId) {
+      if (!confirm('Are you sure you want to revoke this key? This cannot be undone.')) return;
+      
+      try {
+        const res = await fetch(`${API_URL}/keys/${keyId}`, { method: 'DELETE' });
+        const data = await res.json();
+        
+        if (data.success) {
+          loadKeys();
+        } else {
+          alert('Error revoking key');
+        }
+      } catch (e) {
+        alert('Error revoking key');
+      }
+    }
+
+    // Load analytics
+    async function loadAnalytics() {
+      try {
+        const res = await fetch(`${API_URL}/analytics?period=24h`);
+        const data = await res.json();
+        
+        document.getElementById('totalRequests').textContent = data.totalRequests?.toLocaleString() || 0;
+        document.getElementById('hitRate').textContent = (data.hitRate || 0) + '%';
+        
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    // Initialize
+    loadKeys();
+    loadAnalytics();
+    
+    // Auto-refresh every 30 seconds
+    setInterval(() => { loadKeys(); loadAnalytics(); }, 30000);
+  </script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 // Usage Tracking for PromptCache
-import { pg } from './pgClient';
+// pg client not available - using analytics.ts instead
 
 export interface UsageRecord {
   id: number;
@@ -44,55 +44,17 @@ export class UsageTracker {
   }
   
   private async store(record: Omit<UsageRecord, 'id' | 'timestamp'>) {
-    try {
-      await pg.query(
-        `INSERT INTO usage (api_key, prompt, cached, latency, tokens, cost)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [record.apiKey, record.prompt, record.cached, record.latency, record.tokens, record.cost]
-      );
-    } catch (e) {
-      // Silent fail - don't break API
-    }
+    // Using analytics.ts for tracking instead
   }
   
   // Get usage stats for an API key
   async getStats(apiKey: string, days = 7) {
-    try {
-      const result = await pg.query(`
-        SELECT 
-          COUNT(*) as total_requests,
-          SUM(CASE WHEN cached THEN 1 ELSE 0 END) as cache_hits,
-          SUM(tokens) as total_tokens,
-          SUM(cost) as total_cost,
-          AVG(latency) as avg_latency
-        FROM usage
-        WHERE api_key = $1
-        AND timestamp > NOW() - INTERVAL '${days} days'
-      `, [apiKey]);
-      
-      return result.rows[0];
-    } catch (e) {
-      return null;
-    }
+    return null;
   }
   
   // Get all-time stats
   async getAllTimeStats() {
-    try {
-      const result = await pg.query(`
-        SELECT 
-          COUNT(*) as total_requests,
-          SUM(CASE WHEN cached THEN 1 ELSE 0 END) as cache_hits,
-          SUM(tokens) as total_tokens,
-          SUM(cost) as total_cost,
-          COUNT(DISTINCT api_key) as unique_keys
-        FROM usage
-      `);
-      
-      return result.rows[0];
-    } catch (e) {
-      return null;
-    }
+    return null;
   }
 }
 

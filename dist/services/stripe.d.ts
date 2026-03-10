@@ -1,5 +1,4 @@
 export declare const stripe: null;
-export declare function createCustomer(): Promise<void>;
 export interface Subscription {
     id: string;
     customerId: string;
@@ -26,17 +25,17 @@ export declare const TIERS: {
         price: number;
     };
 };
-export interface Subscription {
-    id: string;
-    customerId: string;
-    tier: string;
-    status: string;
-    currentPeriodEnd: number;
-    requestsThisPeriod: number;
-}
-export declare function createPortalSession(customerId: string, returnUrl?: string): Promise<string>;
-export declare function getOrCreateCustomer(email: string, name?: string): Promise<string>;
-export declare function cancelSubscription(subscriptionId: string): Promise<boolean>;
-export declare function canMakeRequest(tier: 'free' | 'pro' | 'enterprise', requestsUsed: number): boolean;
-export declare function getTierFromPrice(priceId: string): 'pro' | 'enterprise' | null;
+export declare function createCheckoutSession(tier: 'pro' | 'enterprise', customerId?: string, successUrl?: string, cancelUrl?: string): Promise<{
+    url: string;
+    sessionId: string;
+}>;
+export declare function getSubscription(subscriptionId: string): Promise<Subscription | null>;
+export declare function getOrCreateCustomer(email: string): Promise<string>;
+export declare function createCustomer(email: string, name?: string): Promise<string>;
+export declare function handleWebhook(body: string, signature: string): Promise<{
+    received: true;
+    type?: string;
+    data?: any;
+}>;
+export declare function getAllAPIKeys(): Promise<any[]>;
 //# sourceMappingURL=stripe.d.ts.map

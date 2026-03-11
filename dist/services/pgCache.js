@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.pool = void 0;
 exports.initPgCache = initPgCache;
 exports.isPgAvailable = isPgAvailable;
 exports.isVectorAvailable = isVectorAvailable;
@@ -14,7 +15,7 @@ exports.pgClearByModel = pgClearByModel;
 exports.pgGetKeys = pgGetKeys;
 exports.pgStatsByModel = pgStatsByModel;
 const pg_1 = require("pg");
-const pool = new pg_1.Pool({
+exports.pool = new pg_1.Pool({
     connectionString: process.env.DATABASE_URL || 'postgresql://adamwallace@/openclaw_memory?host=/tmp',
 });
 let pgAvailable = false;
@@ -38,9 +39,9 @@ function simpleEmbedding(text) {
 async function initPgCache() {
     try {
         // Enable vector extension
-        await pool.query(`CREATE EXTENSION IF NOT EXISTS vector`);
+        await exports.pool.query(`CREATE EXTENSION IF NOT EXISTS vector`);
         vectorAvailable = true;
-        await pool.query(`
+        await exports.pool.query(`
       CREATE TABLE IF NOT EXISTS prompt_cache (
         key VARCHAR(16) PRIMARY KEY,
         prompt TEXT NOT NULL,
@@ -73,7 +74,7 @@ async function pgSet(key, entry, embedding) {
         return false;
     try {
         const emb = embedding || simpleEmbedding(entry.prompt);
-        await pool.query(`INSERT INTO prompt_cache (key, prompt, response, model, created_at, ttl, hits, embedding)
+        await exports.pool.query(`INSERT INTO prompt_cache (key, prompt, response, model, created_at, ttl, hits, embedding)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (key) DO UPDATE SET
          prompt = EXCLUDED.prompt,
@@ -93,7 +94,7 @@ async function pgGet(key) {
     if (!pgAvailable)
         return null;
     try {
-        const result = await pool.query('SELECT * FROM prompt_cache WHERE key = $1', [key]);
+        const result = await exports.pool.query('SELECT * FROM prompt_cache WHERE key = $1', [key]);
         if (result.rows.length === 0)
             return null;
         const row = result.rows[0];
@@ -121,7 +122,7 @@ async function pgSemanticSearch(prompt, threshold = 0.7) {
         return null;
     try {
         const emb = simpleEmbedding(prompt);
-        const result = await pool.query(`SELECT *, (embedding <=> $1::vector) as distance 
+        const result = await exports.pool.query(`SELECT *, (embedding <=> $1::vector) as distance 
        FROM prompt_cache 
        WHERE created_at + ttl > $2
        ORDER BY embedding <=> $1::vector
@@ -132,7 +133,7 @@ async function pgSemanticSearch(prompt, threshold = 0.7) {
         if (row.distance > (1 - threshold))
             return null;
         // Update hits
-        await pool.query('UPDATE prompt_cache SET hits = hits + 1 WHERE key = $1', [row.key]);
+        await exports.pool.query('UPDATE prompt_cache SET hits = hits + 1 WHERE key = $1', [row.key]);
         return {
             prompt: row.prompt,
             response: row.response,
@@ -150,7 +151,7 @@ async function pgDel(key) {
     if (!pgAvailable)
         return;
     try {
-        await pool.query('DELETE FROM prompt_cache WHERE key = $1', [key]);
+        await exports.pool.query('DELETE FROM prompt_cache WHERE key = $1', [key]);
     }
     catch { }
 }
@@ -158,7 +159,7 @@ async function pgClear() {
     if (!pgAvailable)
         return;
     try {
-        await pool.query('DELETE FROM prompt_cache');
+        await exports.pool.query('DELETE FROM prompt_cache');
     }
     catch { }
 }
@@ -166,7 +167,7 @@ async function pgStats() {
     if (!pgAvailable)
         return { entries: 0, totalHits: 0 };
     try {
-        const count = await pool.query('SELECT COUNT(*) as cnt, COALESCE(SUM(hits), 0) as hits FROM prompt_cache');
+        const count = await exports.pool.query('SELECT COUNT(*) as cnt, COALESCE(SUM(hits), 0) as hits FROM prompt_cache');
         return {
             entries: parseInt(count.rows[0].cnt),
             totalHits: parseInt(count.rows[0].hits),
@@ -180,7 +181,7 @@ async function pgCleanup() {
     if (!pgAvailable)
         return 0;
     try {
-        const result = await pool.query('DELETE FROM prompt_cache WHERE created_at + ttl < $1', [Date.now()]);
+        const result = await exports.pool.query('DELETE FROM prompt_cache WHERE created_at + ttl < $1', [Date.now()]);
         return result.rowCount || 0;
     }
     catch {
@@ -192,7 +193,7 @@ async function pgClearByModel(model) {
     if (!pgAvailable)
         return 0;
     try {
-        const result = await pool.query('DELETE FROM prompt_cache WHERE model = $1', [model]);
+        const result = await exports.pool.query('DELETE FROM prompt_cache WHERE model = $1', [model]);
         return result.rowCount || 0;
     }
     catch {
@@ -204,7 +205,7 @@ async function pgGetKeys(limit = 100, offset = 0) {
     if (!pgAvailable)
         return [];
     try {
-        const result = await pool.query('SELECT key, model, hits, created_at, ttl FROM prompt_cache ORDER BY hits DESC LIMIT $1 OFFSET $2', [limit, offset]);
+        const result = await exports.pool.query('SELECT key, model, hits, created_at, ttl FROM prompt_cache ORDER BY hits DESC LIMIT $1 OFFSET $2', [limit, offset]);
         return result.rows.map(row => ({
             key: row.key,
             model: row.model,
@@ -222,7 +223,7 @@ async function pgStatsByModel() {
     if (!pgAvailable)
         return {};
     try {
-        const result = await pool.query('SELECT model, COUNT(*) as cnt, COALESCE(SUM(hits), 0) as hits FROM prompt_cache GROUP BY model');
+        const result = await exports.pool.query('SELECT model, COUNT(*) as cnt, COALESCE(SUM(hits), 0) as hits FROM prompt_cache GROUP BY model');
         const stats = {};
         for (const row of result.rows) {
             stats[row.model] = {

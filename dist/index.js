@@ -426,6 +426,166 @@ app.get('/cache/stats/by-model', async (req, res) => {
     }
     res.json({ stats, backend });
 });
+// Export all cache entries (for backup/migration) - must be before :prompt(*) route
+app.get('/cache/export', async (req, res) => {
+    const format = req.query.format || 'json';
+    const model = req.query.model;
+    const entries = [];
+    // Collect from PostgreSQL
+    if ((0, pgCache_1.isPgAvailable)()) {
+        try {
+            const result = await pgCache_1.pool.query('SELECT * FROM prompt_cache' + (model ? ' WHERE model = $1' : ''), model ? [model] : []);
+            for (const row of result.rows) {
+                if (Date.now() <= row.created_at + row.ttl) {
+                    entries.push({
+                        key: row.key,
+                        prompt: row.prompt,
+                        response: row.response,
+                        model: row.model,
+                        createdAt: row.created_at,
+                        ttl: row.ttl,
+                        hits: row.hits,
+                    });
+                }
+            }
+        }
+        catch { }
+    }
+    // Collect from Redis
+    if (useRedis && redis) {
+        try {
+            const keys = await redis.keys('prompt:*');
+            for (const k of keys) {
+                const data = await redis.get(k);
+                if (data) {
+                    const entry = JSON.parse(data);
+                    if (!model || entry.model === model) {
+                        if (Date.now() <= entry.createdAt + entry.ttl) {
+                            entries.push({
+                                key: k.replace('prompt:', ''),
+                                prompt: entry.prompt,
+                                response: entry.response,
+                                model: entry.model,
+                                createdAt: entry.createdAt,
+                                ttl: entry.ttl,
+                                hits: entry.hits,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        catch { }
+    }
+    // Collect from memory
+    for (const [key, entry] of memoryCache) {
+        if (!model || entry.model === model) {
+            if (Date.now() <= entry.createdAt + entry.ttl) {
+                entries.push({
+                    key,
+                    prompt: entry.prompt,
+                    response: entry.response,
+                    model: entry.model,
+                    createdAt: entry.createdAt,
+                    ttl: entry.ttl,
+                    hits: entry.hits,
+                });
+            }
+        }
+    }
+    if (format === 'csv') {
+        const header = 'key,prompt,response,model,createdAt,ttl,hits\n';
+        const rows = entries.map(e => `"${e.key}","${e.prompt.replace(/"/g, '""')}","${e.response.replace(/"/g, '""')}","${e.model}",${e.createdAt},${e.ttl},${e.hits}`).join('\n');
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', 'attachment; filename=prompt-cache-export.csv');
+        res.send(header + rows);
+    }
+    else {
+        res.json({
+            exported: entries.length,
+            backend: getBackend(),
+            model: model || 'all',
+            entries
+        });
+    }
+});
+// Import cache entries (from export or migration)
+app.post('/cache/import', async (req, res) => {
+    const { entries, mode = 'merge' } = req.body;
+    if (!Array.isArray(entries) || entries.length === 0) {
+        return res.status(400).json({ error: 'entries array required' });
+    }
+    if (entries.length > 1000) {
+        return res.status(400).json({ error: 'Maximum 1000 entries per import' });
+    }
+    if (!['merge', 'replace'].includes(mode)) {
+        return res.status(400).json({ error: 'mode must be merge or replace' });
+    }
+    // If replace mode, clear cache first
+    if (mode === 'replace') {
+        if ((0, pgCache_1.isPgAvailable)()) {
+            await (0, pgCache_1.pgClear)();
+        }
+        else if (useRedis && redis) {
+            try {
+                const keys = await redis.keys('prompt:*');
+                if (keys.length)
+                    await redis.del(...keys);
+            }
+            catch { }
+        }
+        memoryCache.clear();
+    }
+    let imported = 0;
+    let failed = 0;
+    const errors = [];
+    for (const item of entries) {
+        const { prompt, response, model, ttl, createdAt, hits } = item;
+        if (!prompt || !response) {
+            failed++;
+            errors.push('prompt and response required');
+            continue;
+        }
+        const key = hashPrompt(prompt);
+        const entry = {
+            prompt,
+            response,
+            model: model || 'gpt-4',
+            createdAt: createdAt || Date.now(),
+            ttl: ttl || 3600000,
+            hits: hits || 0,
+        };
+        let ok = false;
+        if ((0, pgCache_1.isPgAvailable)()) {
+            ok = await (0, pgCache_1.pgSet)(key, entry);
+        }
+        if (!ok && useRedis && redis) {
+            try {
+                await redis.setex(`prompt:${key}`, Math.floor(entry.ttl / 1000), JSON.stringify(entry));
+                ok = true;
+            }
+            catch { }
+        }
+        if (!ok) {
+            memoryCache.set(key, entry);
+            ok = true;
+        }
+        if (ok)
+            imported++;
+        else {
+            failed++;
+            errors.push(`Failed to import: ${key}`);
+        }
+    }
+    res.json({
+        success: true,
+        total: entries.length,
+        imported,
+        failed,
+        mode,
+        errors: errors.slice(0, 5)
+    });
+});
 // Get cached prompt (rate limited: 200 req/min)
 app.get('/cache/:prompt(*)', (0, rateLimit_1.rateLimiter)({ windowMs: 60000, maxRequests: 200 }), async (req, res) => {
     const startTime = Date.now();
@@ -605,6 +765,52 @@ app.delete('/cache/:prompt(*)', async (req, res) => {
     }
     memoryCache.delete(key);
     res.json({ success: true, key });
+});
+// ===== New: TTL Update, Export, Import =====
+// Update TTL on existing cache entry (extend without re-caching)
+app.patch('/cache/:prompt(*)', async (req, res) => {
+    const { ttl } = req.body;
+    const key = hashPrompt(req.params.prompt);
+    if (ttl === undefined || typeof ttl !== 'number' || ttl < 0) {
+        return res.status(400).json({ error: 'ttl (positive number in ms) required' });
+    }
+    let updated = false;
+    let entry = null;
+    // Try PostgreSQL first
+    if ((0, pgCache_1.isPgAvailable)()) {
+        entry = await (0, pgCache_1.pgGet)(key);
+        if (entry) {
+            entry.ttl = ttl;
+            await (0, pgCache_1.pgSet)(key, entry);
+            updated = true;
+        }
+    }
+    // Try Redis
+    if (!updated && useRedis && redis) {
+        try {
+            const data = await redis.get(`prompt:${key}`);
+            if (data) {
+                const parsed = JSON.parse(data);
+                parsed.ttl = ttl;
+                await redis.setex(`prompt:${key}`, Math.floor(ttl / 1000), JSON.stringify(parsed));
+                updated = true;
+            }
+        }
+        catch { }
+    }
+    // Try memory
+    if (!updated) {
+        entry = memoryCache.get(key) || null;
+        if (entry) {
+            entry.ttl = ttl;
+            memoryCache.set(key, entry);
+            updated = true;
+        }
+    }
+    if (!updated) {
+        return res.status(404).json({ error: 'Cache entry not found' });
+    }
+    res.json({ success: true, key, newTtl: ttl });
 });
 // Clear cache by model
 app.delete('/cache/model/:model', async (req, res) => {

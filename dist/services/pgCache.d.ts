@@ -1,3 +1,5 @@
+import { Pool } from 'pg';
+export declare const pool: Pool;
 export declare function initPgCache(): Promise<void>;
 export declare function isPgAvailable(): boolean;
 export declare function isVectorAvailable(): boolean;

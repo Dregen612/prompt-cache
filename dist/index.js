@@ -426,6 +426,93 @@ app.get('/cache/stats/by-model', async (req, res) => {
     }
     res.json({ stats, backend });
 });
+// Prefix search - find cached prompts by prefix (for autocomplete)
+app.get('/cache/search', apiKeyAuth_1.optionalApiKeyAuth, async (req, res) => {
+    const prefix = req.query.prefix;
+    const limit = Math.min(parseInt(req.query.limit) || 10, 100);
+    if (!prefix || prefix.length < 2) {
+        return res.status(400).json({ error: 'Prefix must be at least 2 characters' });
+    }
+    const backend = getBackend();
+    let results = [];
+    if (backend === 'pg') {
+        results = await (0, pgCache_1.pgPrefixSearch)(prefix, limit);
+    }
+    else if (backend === 'redis' && redis) {
+        try {
+            const keys = await redis.keys('prompt:*');
+            for (const key of keys) {
+                const data = await redis.get(key);
+                if (data) {
+                    const entry = JSON.parse(data);
+                    if (entry.prompt.toLowerCase().startsWith(prefix.toLowerCase())) {
+                        results.push(entry);
+                        if (results.length >= limit)
+                            break;
+                    }
+                }
+            }
+        }
+        catch { }
+    }
+    else {
+        for (const entry of memoryCache.values()) {
+            if (entry.prompt.toLowerCase().startsWith(prefix.toLowerCase())) {
+                results.push(entry);
+                if (results.length >= limit)
+                    break;
+            }
+        }
+    }
+    res.json({
+        prefix,
+        results: results.map(e => ({ prompt: e.prompt, model: e.model, hits: e.hits, age: Date.now() - e.createdAt })),
+        count: results.length,
+        backend
+    });
+});
+// Refresh TTL - extend expiration of existing cache entry
+app.put('/cache/refresh', apiKeyAuth_1.optionalApiKeyAuth, async (req, res) => {
+    const { prompt, ttl } = req.body;
+    const newTtl = ttl || 3600000; // default 1 hour
+    if (!prompt) {
+        return res.status(400).json({ error: 'prompt is required' });
+    }
+    const key = hashPrompt(prompt);
+    const backend = getBackend();
+    let success = false;
+    if (backend === 'pg') {
+        success = await (0, pgCache_1.pgRefreshTTL)(key, newTtl);
+    }
+    else if (backend === 'redis' && redis) {
+        try {
+            const data = await redis.get(`prompt:${key}`);
+            if (data) {
+                const entry = JSON.parse(data);
+                entry.createdAt = Date.now();
+                entry.ttl = newTtl;
+                await redis.set(`prompt:${key}`, JSON.stringify(entry));
+                success = true;
+            }
+        }
+        catch { }
+    }
+    else {
+        const entry = memoryCache.get(key);
+        if (entry) {
+            entry.createdAt = Date.now();
+            entry.ttl = newTtl;
+            memoryCache.set(key, entry);
+            success = true;
+        }
+    }
+    if (success) {
+        res.json({ success: true, key, newTtl, backend });
+    }
+    else {
+        res.status(404).json({ error: 'Cache entry not found' });
+    }
+});
 // Export all cache entries (for backup/migration) - must be before :prompt(*) route
 app.get('/cache/export', async (req, res) => {
     const format = req.query.format || 'json';

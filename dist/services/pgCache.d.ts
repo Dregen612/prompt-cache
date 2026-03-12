@@ -33,4 +33,6 @@ export declare function pgStatsByModel(): Promise<Record<string, {
     count: number;
     hits: number;
 }>>;
+export declare function pgPrefixSearch(prefix: string, limit?: number): Promise<CacheEntry[]>;
+export declare function pgRefreshTTL(key: string, newTtl: number): Promise<boolean>;
 //# sourceMappingURL=pgCache.d.ts.map

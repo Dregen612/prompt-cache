@@ -251,3 +251,41 @@ export async function pgStatsByModel(): Promise<Record<string, { count: number; 
     return {};
   }
 }
+
+// Prefix search - find cached prompts starting with given prefix
+export async function pgPrefixSearch(prefix: string, limit = 10): Promise<CacheEntry[]> {
+  if (!pgAvailable) return [];
+  try {
+    const result = await pool.query(
+      `SELECT * FROM prompt_cache 
+       WHERE prompt ILIKE $1 AND created_at + ttl > $2
+       ORDER BY hits DESC 
+       LIMIT $3`,
+      [`${prefix}%`, Date.now(), limit]
+    );
+    return result.rows.map(row => ({
+      prompt: row.prompt,
+      response: row.response,
+      model: row.model,
+      createdAt: row.created_at,
+      ttl: row.ttl,
+      hits: row.hits,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+// Refresh TTL - extend expiration without changing content
+export async function pgRefreshTTL(key: string, newTtl: number): Promise<boolean> {
+  if (!pgAvailable) return false;
+  try {
+    await pool.query(
+      'UPDATE prompt_cache SET created_at = $1, ttl = $2 WHERE key = $3',
+      [Date.now(), newTtl, key]
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}

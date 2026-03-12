@@ -14,6 +14,8 @@ exports.pgCleanup = pgCleanup;
 exports.pgClearByModel = pgClearByModel;
 exports.pgGetKeys = pgGetKeys;
 exports.pgStatsByModel = pgStatsByModel;
+exports.pgPrefixSearch = pgPrefixSearch;
+exports.pgRefreshTTL = pgRefreshTTL;
 const pg_1 = require("pg");
 exports.pool = new pg_1.Pool({
     connectionString: process.env.DATABASE_URL || 'postgresql://adamwallace@/openclaw_memory?host=/tmp',
@@ -235,6 +237,40 @@ async function pgStatsByModel() {
     }
     catch {
         return {};
+    }
+}
+// Prefix search - find cached prompts starting with given prefix
+async function pgPrefixSearch(prefix, limit = 10) {
+    if (!pgAvailable)
+        return [];
+    try {
+        const result = await exports.pool.query(`SELECT * FROM prompt_cache 
+       WHERE prompt ILIKE $1 AND created_at + ttl > $2
+       ORDER BY hits DESC 
+       LIMIT $3`, [`${prefix}%`, Date.now(), limit]);
+        return result.rows.map(row => ({
+            prompt: row.prompt,
+            response: row.response,
+            model: row.model,
+            createdAt: row.created_at,
+            ttl: row.ttl,
+            hits: row.hits,
+        }));
+    }
+    catch {
+        return [];
+    }
+}
+// Refresh TTL - extend expiration without changing content
+async function pgRefreshTTL(key, newTtl) {
+    if (!pgAvailable)
+        return false;
+    try {
+        await exports.pool.query('UPDATE prompt_cache SET created_at = $1, ttl = $2 WHERE key = $3', [Date.now(), newTtl, key]);
+        return true;
+    }
+    catch {
+        return false;
     }
 }
 //# sourceMappingURL=pgCache.js.map

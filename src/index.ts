@@ -50,6 +50,58 @@ interface MemCacheEntry {
 }
 const memoryCache = new Map<string, MemCacheEntry>();
 
+// ===== Request Deduplication (prevents duplicate LLM calls) =====
+const inFlightRequests = new Map<string, { promise: Promise<any>; resolve: Function; reject: Function; createdAt: number }>();
+const IN_FLIGHT_TTL = 30000; // 30 seconds timeout for pending requests
+
+// Clean up stale in-flight requests periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, req] of inFlightRequests.entries()) {
+    if (now - req.createdAt > IN_FLIGHT_TTL) {
+      req.reject(new Error('Request timeout'));
+      inFlightRequests.delete(key);
+    }
+  }
+}, 10000);
+
+// Register an in-flight request - returns existing promise if already in progress
+function registerInFlightRequest(key: string): { isDuplicate: boolean; promise?: Promise<any> } {
+  const existing = inFlightRequests.get(key);
+  if (existing) {
+    return { isDuplicate: true, promise: existing.promise };
+  }
+  
+  let resolveFn: Function;
+  let rejectFn: Function;
+  const promise = new Promise((resolve, reject) => {
+    resolveFn = resolve;
+    rejectFn = reject;
+  });
+  
+  inFlightRequests.set(key, { 
+    promise, 
+    resolve: resolveFn!, 
+    reject: rejectFn!, 
+    createdAt: Date.now() 
+  });
+  
+  return { isDuplicate: false };
+}
+
+// Complete an in-flight request (called when LLM responds)
+function completeInFlightRequest(key: string, response: any, isError = false) {
+  const req = inFlightRequests.get(key);
+  if (req) {
+    if (isError) {
+      req.reject(response);
+    } else {
+      req.resolve(response);
+    }
+    inFlightRequests.delete(key);
+  }
+}
+
 function hashPrompt(prompt: string): string {
   return crypto.createHash('sha256').update(prompt).digest('hex').slice(0, 16);
 }
@@ -309,12 +361,155 @@ app.get('/cache/batch', optionalApiKeyAuth, async (req, res) => {
   
   const hitCount = results.filter(r => r.cached).length;
   
+  // Add rate limit headers
+  res.set('RateLimit-Limit', '200');
+  res.set('RateLimit-Remaining', String(Math.max(0, 200 - prompts.length)));
+  res.set('Cache-Hits', String(hitCount));
+  res.set('Cache-Misses', String(prompts.length - hitCount));
+  
   res.json({
     total: prompts.length,
     hits: hitCount,
     misses: prompts.length - hitCount,
     results,
     backend: getBackend()
+  });
+});
+
+// Cache Warmer - pre-populate cache with prompts using an LLM function
+// This endpoint accepts a list of prompts and a function to generate responses
+app.post('/cache/warm', optionalApiKeyAuth, async (req, res) => {
+  const { prompts, model, ttl, generateResponse } = req.body;
+  
+  if (!Array.isArray(prompts) || prompts.length === 0) {
+    return res.status(400).json({ error: 'prompts array required' });
+  }
+  
+  if (prompts.length > 50) {
+    return res.status(400).json({ error: 'Maximum 50 prompts per warm request' });
+  }
+  
+  const warmTtl = ttl || 3600000; // default 1 hour
+  const warmModel = model || 'gpt-4';
+  
+  // If generateResponse is provided as a function reference, use it
+  // Otherwise, expect responses to be passed directly
+  const results: Array<{ prompt: string; success: boolean; error?: string }> = [];
+  let warmed = 0;
+  
+  if (typeof generateResponse === 'function') {
+    // Server-side warming (limited use - function won't serialize)
+    return res.status(400).json({ error: 'generateResponse must be an API endpoint, not a function' });
+  }
+  
+  // Accept pre-generated responses or call external LLM endpoint
+  for (const item of prompts) {
+    const prompt = typeof item === 'string' ? item : item.prompt;
+    const response = typeof item === 'string' ? null : item.response;
+    
+    if (!prompt) {
+      results.push({ prompt: '', success: false, error: 'prompt required' });
+      continue;
+    }
+    
+    let cachedResponse = response;
+    
+    // If no response provided, try to call external LLM (placeholder - user configures)
+    if (!cachedResponse) {
+      // Call external LLM if endpoint configured
+      const llmEndpoint = process.env.LLM_WARM_ENDPOINT;
+      const llmKey = process.env.LLM_WARM_KEY;
+      
+      if (llmEndpoint && llmKey) {
+        try {
+          const llmRes = await fetch(llmEndpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${llmKey}`
+            },
+            body: JSON.stringify({ prompt, model: warmModel })
+          });
+          const llmData = await llmRes.json();
+          cachedResponse = llmData.response || llmData.content || llmData.text;
+        } catch (e: any) {
+          results.push({ prompt, success: false, error: e.message });
+          continue;
+        }
+      } else {
+        results.push({ prompt, success: false, error: 'No response provided and LLM endpoint not configured' });
+        continue;
+      }
+    }
+    
+    if (!cachedResponse) {
+      results.push({ prompt, success: false, error: 'No response generated' });
+      continue;
+    }
+    
+    const key = hashPrompt(prompt);
+    const entry: CacheEntry = {
+      prompt,
+      response: cachedResponse,
+      model: warmModel,
+      createdAt: Date.now(),
+      ttl: warmTtl,
+      hits: 0
+    };
+    
+    let ok = false;
+    
+    if (isPgAvailable()) {
+      ok = await pgSet(key, entry);
+    }
+    
+    if (!ok && useRedis && redis) {
+      try {
+        await redis.setex(`prompt:${key}`, Math.floor(warmTtl / 1000), JSON.stringify(entry));
+        ok = true;
+      } catch {}
+    }
+    
+    if (!ok) {
+      memoryCache.set(key, entry);
+      ok = true;
+    }
+    
+    if (ok) warmed++;
+    results.push({ prompt, success: ok, error: ok ? undefined : 'Failed to cache' });
+  }
+  
+  res.json({
+    success: true,
+    total: prompts.length,
+    warmed,
+    failed: prompts.length - warmed,
+    results,
+    backend: getBackend()
+  });
+});
+
+// Trigger manual cache cleanup
+app.post('/cache/cleanup', async (req, res) => {
+  let cleaned = 0;
+  
+  if (isPgAvailable()) {
+    cleaned = await pgCleanup();
+  }
+  
+  // Also clean memory cache
+  for (const [key, entry] of memoryCache.entries()) {
+    if (isExpired(entry)) {
+      memoryCache.delete(key);
+      cleaned++;
+    }
+  }
+  
+  res.json({
+    success: true,
+    cleaned,
+    backend: getBackend(),
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -810,6 +1005,170 @@ app.get('/cache/:prompt(*)', rateLimiter({ windowMs: 60000, maxRequests: 200 }),
     hits: entry.hits,
     age: Date.now() - entry.createdAt,
     backend: getBackend()
+  });
+});
+
+// ===== Request Deduplication Endpoints =====
+
+// Check if a request is in-flight (for polling/waiting)
+app.get('/dedupe/status', optionalApiKeyAuth, async (req, res) => {
+  const prompt = req.query.prompt as string;
+  if (!prompt) {
+    return res.status(400).json({ error: 'prompt query parameter required' });
+  }
+  
+  const key = hashPrompt(prompt);
+  const inFlight = inFlightRequests.get(key);
+  
+  if (inFlight) {
+    res.json({ 
+      inFlight: true, 
+      waiting: true,
+      key,
+      waitingSince: inFlight.createdAt
+    });
+  } else {
+    res.json({ inFlight: false, waiting: false, key });
+  }
+});
+
+// Register that we're about to make an LLM call (start deduplication)
+// If another request is already in-flight, this waits for it and returns cached result
+app.post('/dedupe/register', optionalApiKeyAuth, async (req, res) => {
+  const { prompt, model } = req.body;
+  
+  if (!prompt) {
+    return res.status(400).json({ error: 'prompt required' });
+  }
+  
+  const key = hashPrompt(prompt);
+  
+  // Check if already cached (fast path)
+  let entry: CacheEntry | null = null;
+  let backend = 'memory';
+  
+  if (isPgAvailable()) {
+    entry = await pgGet(key);
+    if (entry) backend = 'pg';
+  }
+  
+  if (!entry && useRedis && redis) {
+    try {
+      const data = await redis.get(`prompt:${key}`);
+      if (data) {
+        entry = JSON.parse(data);
+        backend = 'redis';
+      }
+    } catch {}
+  }
+  
+  if (!entry) {
+    entry = memoryCache.get(key) || null;
+    if (entry) backend = 'memory';
+  }
+  
+  // Return cached if exists and not expired
+  if (entry && Date.now() <= entry.createdAt + entry.ttl) {
+    entry.hits++;
+    if (isPgAvailable()) await pgSet(key, entry);
+    else if (useRedis && redis) {
+      await redis.set(`prompt:${key}`, JSON.stringify(entry), 'EX', Math.floor((entry.createdAt + entry.ttl - Date.now()) / 1000));
+    } else {
+      memoryCache.set(key, entry);
+    }
+    return res.json({ 
+      cached: true, 
+      response: entry.response, 
+      model: entry.model,
+      backend
+    });
+  }
+  
+  // Check for in-flight request
+  const registration = registerInFlightRequest(key);
+  
+  if (registration.isDuplicate && registration.promise) {
+    // Someone else is already making this request - wait for it
+    try {
+      const result = await registration.promise;
+      return res.json({ 
+        cached: false, 
+        deduplicated: true, 
+        response: result.response, 
+        model: result.model || model || 'gpt-4',
+        backend: 'dedupe'
+      });
+    } catch (err) {
+      // In-flight request failed, proceed with our own
+    }
+  }
+  
+  // We're the first - proceed with LLM call
+  res.json({ 
+    inFlight: true, 
+    proceed: true, 
+    key,
+    message: 'Make your LLM call, then POST to /dedupe/complete'
+  });
+});
+
+// Complete a deduplication request - call this after LLM responds
+app.post('/dedupe/complete', optionalApiKeyAuth, async (req, res) => {
+  const { prompt, response, model, ttl, error } = req.body;
+  
+  if (!prompt || (!response && !error)) {
+    return res.status(400).json({ error: 'prompt and (response or error) required' });
+  }
+  
+  const key = hashPrompt(prompt);
+  const cacheTtl = ttl || 3600000;
+  
+  if (error) {
+    // Mark in-flight as failed
+    completeInFlightRequest(key, error, true);
+    return res.json({ success: false, error, deduplicated: false });
+  }
+  
+  // Cache the response
+  const entry: CacheEntry = {
+    prompt,
+    response,
+    model: model || 'gpt-4',
+    createdAt: Date.now(),
+    ttl: cacheTtl,
+    hits: 1
+  };
+  
+  let backend = 'memory';
+  let ok = false;
+  
+  if (isPgAvailable()) {
+    ok = await pgSet(key, entry);
+    if (ok) backend = 'pg';
+  }
+  
+  if (!ok && useRedis && redis) {
+    try {
+      await redis.setex(`prompt:${key}`, Math.floor(cacheTtl / 1000), JSON.stringify(entry));
+      ok = true;
+      backend = 'redis';
+    } catch {}
+  }
+  
+  if (!ok) {
+    memoryCache.set(key, entry);
+    ok = true;
+  }
+  
+  // Complete the in-flight request so waiters get the result
+  completeInFlightRequest(key, { response, model: entry.model });
+  
+  res.json({ 
+    success: true, 
+    key, 
+    cached: ok,
+    backend,
+    deduplicated: true
   });
 });
 

@@ -430,7 +430,7 @@ app.post('/cache/warm', optionalApiKeyAuth, async (req, res) => {
             },
             body: JSON.stringify({ prompt, model: warmModel })
           });
-          const llmData = await llmRes.json();
+          const llmData = await llmRes.json() as { response?: string; content?: string; text?: string };
           cachedResponse = llmData.response || llmData.content || llmData.text;
         } catch (e: any) {
           results.push({ prompt, success: false, error: e.message });

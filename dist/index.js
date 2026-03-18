@@ -842,6 +842,63 @@ app.post('/cache/import', async (req, res) => {
         errors: errors.slice(0, 5)
     });
 });
+// Get cached entry content by key (for debugging/inspection) - MUST be before :prompt route
+app.get('/cache/key/:key', async (req, res) => {
+    const { key } = req.params;
+    if (!key || key.length < 8) {
+        return res.status(400).json({ error: 'Valid cache key required' });
+    }
+    let entry = null;
+    let backend = 'memory';
+    // Try PostgreSQL first
+    if ((0, pgCache_1.isPgAvailable)()) {
+        entry = await (0, pgCache_1.pgGet)(key);
+        if (entry)
+            backend = 'pg';
+    }
+    // Try Redis
+    if (!entry && useRedis && redis) {
+        try {
+            const data = await redis.get(`prompt:${key}`);
+            if (data) {
+                entry = JSON.parse(data);
+                backend = 'redis';
+            }
+        }
+        catch { }
+    }
+    // Try memory
+    if (!entry) {
+        entry = memoryCache.get(key) || null;
+        if (entry)
+            backend = 'memory';
+    }
+    if (!entry) {
+        return res.status(404).json({ error: 'Cache entry not found' });
+    }
+    // Check if expired
+    if (isExpired(entry)) {
+        if ((0, pgCache_1.isPgAvailable)())
+            await (0, pgCache_1.pgDel)(key);
+        else if (useRedis && redis)
+            await redis.del(`prompt:${key}`);
+        else
+            memoryCache.delete(key);
+        return res.status(404).json({ error: 'Cache entry expired' });
+    }
+    res.json({
+        key,
+        prompt: entry.prompt,
+        response: entry.response,
+        model: entry.model,
+        hits: entry.hits,
+        createdAt: entry.createdAt,
+        age: Date.now() - entry.createdAt,
+        ttl: entry.ttl,
+        expiresIn: entry.ttl - (Date.now() - entry.createdAt),
+        backend
+    });
+});
 // Get cached prompt (rate limited: 200 req/min)
 app.get('/cache/:prompt(*)', (0, rateLimit_1.rateLimiter)({ windowMs: 60000, maxRequests: 200 }), async (req, res) => {
     const startTime = Date.now();
@@ -1479,6 +1536,63 @@ app.post('/webhook/stripe', express_1.default.raw({ type: 'application/json' }),
         console.error('Webhook error:', error.message);
         res.status(400).json({ error: error.message });
     }
+});
+// Get cached entry content by key (for debugging/inspection)
+app.get('/cache/key/:key', async (req, res) => {
+    const { key } = req.params;
+    if (!key || key.length < 8) {
+        return res.status(400).json({ error: 'Valid cache key required' });
+    }
+    let entry = null;
+    let backend = 'memory';
+    // Try PostgreSQL first
+    if ((0, pgCache_1.isPgAvailable)()) {
+        entry = await (0, pgCache_1.pgGet)(key);
+        if (entry)
+            backend = 'pg';
+    }
+    // Try Redis
+    if (!entry && useRedis && redis) {
+        try {
+            const data = await redis.get(`prompt:${key}`);
+            if (data) {
+                entry = JSON.parse(data);
+                backend = 'redis';
+            }
+        }
+        catch { }
+    }
+    // Try memory
+    if (!entry) {
+        entry = memoryCache.get(key) || null;
+        if (entry)
+            backend = 'memory';
+    }
+    if (!entry) {
+        return res.status(404).json({ error: 'Cache entry not found' });
+    }
+    // Check if expired
+    if (isExpired(entry)) {
+        if ((0, pgCache_1.isPgAvailable)())
+            await (0, pgCache_1.pgDel)(key);
+        else if (useRedis && redis)
+            await redis.del(`prompt:${key}`);
+        else
+            memoryCache.delete(key);
+        return res.status(404).json({ error: 'Cache entry expired' });
+    }
+    res.json({
+        key,
+        prompt: entry.prompt,
+        response: entry.response,
+        model: entry.model,
+        hits: entry.hits,
+        createdAt: entry.createdAt,
+        age: Date.now() - entry.createdAt,
+        ttl: entry.ttl,
+        expiresIn: entry.ttl - (Date.now() - entry.createdAt),
+        backend
+    });
 });
 app.listen(PORT, () => {
     console.log(`🚀 PromptCache running on port ${PORT}`);

@@ -251,6 +251,41 @@ curl "http://localhost:3000/cache/search?prefix=Write&limit=10"
 
 ---
 
+#### GET /cache/similar/:prompt
+Find semantically similar cached prompts. Useful for prompt clustering, cache exploration, and pre-checking if a new prompt might overlap with existing cache entries.
+
+```bash
+curl "http://localhost:3000/cache/similar/Write%20a%20poem%20about%20programming?limit=5"
+```
+
+**Response:**
+```json
+{
+  "prompt": "Write a poem about programming",
+  "similar": [
+    {
+      "prompt": "Write a short poem about computers",
+      "response": "Machines that think and learn...",
+      "model": "gpt-4",
+      "similarity": 0.73,
+      "hits": 0,
+      "age": 3693
+    }
+  ],
+  "count": 1,
+  "backend": "pg"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| similarity | number | Cosine similarity 0–1 (higher = more similar) |
+| limit | number | Max results, default 5, max 20 |
+
+**Note:** Requires PostgreSQL with vector support. Read-only operation (does not increment hit counts).
+
+---
+
 #### PUT /cache/refresh
 Extend TTL of existing cache entry.
 

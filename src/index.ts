@@ -2,7 +2,7 @@ import express from 'express';
 import Redis from 'ioredis';
 import crypto from 'crypto';
 import Stripe from 'stripe';
-import { initPgCache, isPgAvailable, isVectorAvailable, pgSet, pgGet, pgDel, pgClear, pgStats, pgCleanup, pgSemanticSearch, pgClearByModel, pgGetKeys, pgStatsByModel, pgPrefixSearch, pgRefreshTTL, CacheEntry, pool } from './services/pgCache';
+import { initPgCache, isPgAvailable, isVectorAvailable, pgSet, pgGet, pgDel, pgClear, pgStats, pgCleanup, pgSemanticSearch, pgFindSimilar, pgClearByModel, pgGetKeys, pgStatsByModel, pgPrefixSearch, pgRefreshTTL, CacheEntry, pool } from './services/pgCache';
 import { apiKeyAuth, optionalApiKeyAuth } from './middleware/apiKeyAuth';
 import { rateLimiter } from './middleware/rateLimit';
 import { recordRequest, getUsageStats, TIERS } from './services/usageLimits';
@@ -676,6 +676,41 @@ app.get('/cache/search', optionalApiKeyAuth, async (req, res) => {
     results: results.map(e => ({ prompt: e.prompt, model: e.model, hits: e.hits, age: Date.now() - e.createdAt })),
     count: results.length,
     backend 
+  });
+});
+
+// Find semantically similar cached prompts
+app.get('/cache/similar/:prompt(*)', optionalApiKeyAuth, async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit as string) || 5, 20);
+  const prompt = req.params.prompt;
+  
+  if (!prompt || prompt.trim().length < 3) {
+    return res.status(400).json({ error: 'prompt must be at least 3 characters' });
+  }
+  
+  const backend = getBackend();
+  
+  if (backend !== 'pg' || !isPgAvailable() || !isVectorAvailable()) {
+    return res.status(503).json({ 
+      error: 'Semantic search requires PostgreSQL with vector support',
+      backend 
+    });
+  }
+  
+  const similar = await pgFindSimilar(prompt, limit);
+  
+  res.json({
+    prompt,
+    similar: similar.map(e => ({
+      prompt: e.prompt,
+      response: e.response,
+      model: e.model,
+      similarity: Math.round(e.similarity * 100) / 100,
+      hits: e.hits,
+      age: Date.now() - e.createdAt,
+    })),
+    count: similar.length,
+    backend: 'pg'
   });
 });
 

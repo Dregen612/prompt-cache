@@ -289,3 +289,30 @@ export async function pgRefreshTTL(key: string, newTtl: number): Promise<boolean
     return false;
   }
 }
+
+// Find top N semantically similar prompts (read-only, does not increment hits)
+export async function pgFindSimilar(prompt: string, limit = 5): Promise<Array<CacheEntry & { similarity: number }>> {
+  if (!pgAvailable || !vectorAvailable) return [];
+  try {
+    const emb = simpleEmbedding(prompt);
+    const result = await pool.query(
+      `SELECT *, (embedding <=> $1::vector) as distance
+       FROM prompt_cache
+       WHERE created_at + ttl > $2
+       ORDER BY embedding <=> $1::vector
+       LIMIT $3`,
+      [JSON.stringify(emb), Date.now(), limit]
+    );
+    return result.rows.map(row => ({
+      prompt: row.prompt,
+      response: row.response,
+      model: row.model,
+      createdAt: row.created_at,
+      ttl: row.ttl,
+      hits: row.hits,
+      similarity: 1 - row.distance, // convert cosine distance to similarity (0-1)
+    }));
+  } catch {
+    return [];
+  }
+}

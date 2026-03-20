@@ -196,6 +196,192 @@ app.post('/cache', rateLimiter({ windowMs: 60000, maxRequests: 100 }), async (re
   res.json({ success: true, key, backend: 'memory' });
 });
 
+// Stream cached response or proxy+cache LLM streaming response via SSE
+app.post('/cache/stream', async (req, res) => {
+  const apiKey = req.headers['x-api-key'] as string;
+  const usage = apiKey ? recordRequest(apiKey, false) : { allowed: true, remaining: -1, tier: 'free' };
+
+  if (!usage.allowed) {
+    return res.status(429).json({ error: 'Daily limit exceeded', tier: usage.tier, remaining: 0 });
+  }
+
+  const { prompt, model = 'gpt-4', llmEndpoint, llmKey, ttl = 3600000 } = req.body;
+
+  if (!prompt) {
+    return res.status(400).json({ error: 'prompt required' });
+  }
+
+  const key = hashPrompt(prompt);
+  const startTime = Date.now();
+
+  // 1. Check cache first
+  let entry: CacheEntry | null = null;
+
+  if (isPgAvailable()) {
+    entry = await pgGet(key);
+  }
+
+  if (!entry && useRedis && redis) {
+    try {
+      const data = await redis.get(`prompt:${key}`);
+      if (data) entry = JSON.parse(data);
+    } catch {}
+  }
+
+  if (!entry) {
+    entry = memoryCache.get(key) || null;
+  }
+
+  if (entry && !isExpired(entry)) {
+    // Cache HIT — stream cached response via SSE
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('X-Cache-Status', 'HIT');
+    res.setHeader('X-Cache-Backend', getBackend());
+
+    const streamId = `cache-${Date.now()}`;
+    const age = Date.now() - entry.createdAt;
+
+    res.write(`event: meta\n`);
+    res.write(`data: ${JSON.stringify({ cached: true, key, model: entry.model, age, hits: entry.hits + 1, backend: getBackend() })}\n\n`);
+
+    // Stream the response word-by-word with slight delays for realism
+    const words = entry.response.split(' ');
+    for (let i = 0; i < words.length; i++) {
+      res.write(`event: chunk\n`);
+      res.write(`data: ${JSON.stringify({ text: words[i] + (i < words.length - 1 ? ' ' : ''), done: false })}\n\n`);
+      await new Promise(r => setImmediate(r));
+    }
+
+    // Update hits (fire-and-forget)
+    if (isPgAvailable()) {
+      entry.hits++;
+      pgSet(key, entry).catch(() => {});
+    } else if (useRedis && redis) {
+      entry.hits++;
+      redis.set(`prompt:${key}`, JSON.stringify(entry), 'EX', Math.floor((entry.createdAt + entry.ttl - Date.now()) / 1000)).catch(() => {});
+    } else {
+      entry.hits++;
+      memoryCache.set(key, entry);
+    }
+
+    const latency = Date.now() - startTime;
+    analytics.recordRequest(true, latency, entry.model);
+
+    res.write(`event: done\n`);
+    res.write(`data: ${JSON.stringify({ latency, cached: true })}\n\n`);
+    res.end();
+    return;
+  }
+
+  // 2. Cache MISS — stream from LLM and cache while streaming
+  if (!llmEndpoint || !llmKey) {
+    return res.status(400).json({ error: 'llmEndpoint and llmKey required on cache miss (or pre-cache with POST /cache)' });
+  }
+
+  // Stream the LLM response
+  let fullResponse = '';
+
+  try {
+    const llmRes = await fetch(llmEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${llmKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        stream: true,
+      }),
+    });
+
+    if (!llmRes.ok) {
+      const errText = await llmRes.text();
+      return res.status(502).json({ error: 'LLM request failed', details: errText });
+    }
+
+    if (!llmRes.body) {
+      return res.status(502).json({ error: 'LLM returned no stream body' });
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('X-Cache-Status', 'MISS');
+    res.setHeader('X-Cache-Backend', getBackend());
+    res.setHeader('X-Cache-Key', key);
+
+    const streamId = `llm-${Date.now()}`;
+
+    res.write(`event: meta\n`);
+    res.write(`data: ${JSON.stringify({ cached: false, key, model, streamId })}\n\n`);
+
+    const reader = llmRes.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (data === '[DONE]') continue;
+
+        try {
+          const parsed = JSON.parse(data);
+          const text = parsed.choices?.[0]?.delta?.content || parsed.delta?.content || '';
+          if (text) {
+            fullResponse += text;
+            res.write(`event: chunk\n`);
+            res.write(`data: ${JSON.stringify({ text, done: false })}\n\n`);
+          }
+        } catch {
+          // Skip malformed JSON
+        }
+      }
+    }
+
+    // Cache the complete response
+    if (fullResponse) {
+      const cacheEntry: CacheEntry = {
+        prompt,
+        response: fullResponse,
+        model,
+        createdAt: Date.now(),
+        ttl,
+        hits: 1,
+      };
+
+      if (isPgAvailable()) {
+        pgSet(key, cacheEntry).catch(() => {});
+      } else if (useRedis && redis) {
+        redis.setex(`prompt:${key}`, Math.floor(ttl / 1000), JSON.stringify(cacheEntry)).catch(() => {});
+      } else {
+        memoryCache.set(key, cacheEntry);
+      }
+    }
+
+    const latency = Date.now() - startTime;
+    analytics.recordRequest(false, latency, model);
+
+    res.write(`event: done\n`);
+    res.write(`data: ${JSON.stringify({ latency, cached: false, key, fullResponse: fullResponse.length })}\n\n`);
+    res.end();
+  } catch (err: any) {
+    console.error('Stream error:', err);
+    if (!res.headersSent) {
+      return res.status(500).json({ error: 'Stream failed', details: err.message });
+    }
+    res.end();
+  }
+});
+
 // Batch cache multiple prompts at once
 app.post('/cache/batch', optionalApiKeyAuth, async (req, res) => {
   const { entries } = req.body;

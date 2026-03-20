@@ -35,4 +35,7 @@ export declare function pgStatsByModel(): Promise<Record<string, {
 }>>;
 export declare function pgPrefixSearch(prefix: string, limit?: number): Promise<CacheEntry[]>;
 export declare function pgRefreshTTL(key: string, newTtl: number): Promise<boolean>;
+export declare function pgFindSimilar(prompt: string, limit?: number): Promise<Array<CacheEntry & {
+    similarity: number;
+}>>;
 //# sourceMappingURL=pgCache.d.ts.map

@@ -16,6 +16,7 @@ exports.pgGetKeys = pgGetKeys;
 exports.pgStatsByModel = pgStatsByModel;
 exports.pgPrefixSearch = pgPrefixSearch;
 exports.pgRefreshTTL = pgRefreshTTL;
+exports.pgFindSimilar = pgFindSimilar;
 const pg_1 = require("pg");
 exports.pool = new pg_1.Pool({
     connectionString: process.env.DATABASE_URL || 'postgresql://adamwallace@/openclaw_memory?host=/tmp',
@@ -271,6 +272,31 @@ async function pgRefreshTTL(key, newTtl) {
     }
     catch {
         return false;
+    }
+}
+// Find top N semantically similar prompts (read-only, does not increment hits)
+async function pgFindSimilar(prompt, limit = 5) {
+    if (!pgAvailable || !vectorAvailable)
+        return [];
+    try {
+        const emb = simpleEmbedding(prompt);
+        const result = await exports.pool.query(`SELECT *, (embedding <=> $1::vector) as distance
+       FROM prompt_cache
+       WHERE created_at + ttl > $2
+       ORDER BY embedding <=> $1::vector
+       LIMIT $3`, [JSON.stringify(emb), Date.now(), limit]);
+        return result.rows.map(row => ({
+            prompt: row.prompt,
+            response: row.response,
+            model: row.model,
+            createdAt: row.created_at,
+            ttl: row.ttl,
+            hits: row.hits,
+            similarity: 1 - row.distance, // convert cosine distance to similarity (0-1)
+        }));
+    }
+    catch {
+        return [];
     }
 }
 //# sourceMappingURL=pgCache.js.map

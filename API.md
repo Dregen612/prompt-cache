@@ -151,6 +151,51 @@ curl -X PATCH "http://localhost:3000/cache/Write%20a%20haiku%20about%20coding" \
 
 ---
 
+#### POST /cache/stream
+Stream a cached response or proxy+cache an LLM stream via **Server-Sent Events (SSE)**. Cache hits stream immediately without calling any LLM. Cache misses stream from the LLM while accumulating the full response, then cache it automatically.
+
+```bash
+curl -X POST http://localhost:3000/cache/stream \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "Write a haiku about coding",
+    "model": "gpt-4",
+    "llmEndpoint": "https://api.openai.com/v1/chat/completions",
+    "llmKey": "sk-...",
+    "ttl": 3600000
+  }'
+```
+
+**Request Body:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| prompt | string | Yes | The prompt to look up or generate |
+| model | string | No | Model identifier (default: gpt-4) |
+| llmEndpoint | string | Conditional | OpenAI-compatible streaming endpoint (required on cache miss) |
+| llmKey | string | Conditional | API key for the LLM endpoint (required on cache miss) |
+| ttl | number | No | Time to live in ms (default: 3600000) |
+
+**Response: SSE stream**
+
+Headers:
+- `X-Cache-Status: HIT` or `MISS`
+- `X-Cache-Backend: pg | redis | memory`
+- `X-Cache-Key: <key>` (on MISS)
+
+SSE Events:
+```json
+// event: meta (first event)
+{ "cached": true, "key": "a1b2c3d4", "model": "gpt-4", "age": 45000, "hits": 3, "backend": "pg" }
+
+// event: chunk (one per word on HIT, per delta on MISS)
+{ "text": "Why ", "done": false }
+
+// event: done (final event)
+{ "latency": 12, "cached": true, "key": "a1b2c3d4", "fullResponse": 42 }
+```
+
+---
+
 ### Batch Operations
 
 #### POST /cache/batch

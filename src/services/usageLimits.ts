@@ -1,4 +1,6 @@
 // Usage Limits & Tier Management
+import { validateAPIKey } from './apiKeys';
+
 export interface Tier {
   name: string;
   requestsPerDay: number;
@@ -40,7 +42,7 @@ interface UsageRecord {
 
 const usageRecords: Map<string, UsageRecord[]> = new Map();
 
-export function getUsage(key: string): UsageRecord {
+function getUsage(key: string): UsageRecord {
   const today = new Date().toISOString().split('T')[0];
   
   if (!usageRecords.has(key)) {
@@ -59,14 +61,14 @@ export function getUsage(key: string): UsageRecord {
 }
 
 export function recordRequest(key: string, isCacheHit: boolean = false): { allowed: boolean; remaining: number; tier: string } {
-  const usage = getUsage(key);
-  
-  // Get tier for this key (default to free)
-  const keyTier = 'free'; // Would look up from DB
+  // Look up the actual tier from the API key
+  const keyInfo = validateAPIKey(key);
+  const keyTier = keyInfo.valid && keyInfo.apiKey ? keyInfo.apiKey.tier : 'free';
   
   const tier = TIERS[keyTier];
+  const usage = getUsage(key);
   
-  // Check limits
+  // Check limits (unlimited = -1)
   if (tier.requestsPerDay > 0 && usage.requests >= tier.requestsPerDay) {
     return { allowed: false, remaining: 0, tier: keyTier };
   }
@@ -87,8 +89,10 @@ export function getUsageStats(key: string): {
   limit: number;
   remaining: number;
 } {
+  const keyInfo = validateAPIKey(key);
+  const keyTier = keyInfo.valid && keyInfo.apiKey ? keyInfo.apiKey.tier : 'free';
+  const tier = TIERS[keyTier];
   const usage = getUsage(key);
-  const tier = TIERS['free'];
   
   return {
     today: {
@@ -96,9 +100,9 @@ export function getUsageStats(key: string): {
       cacheHits: usage.cacheHits,
       hitRate: usage.requests > 0 ? (usage.cacheHits / usage.requests) * 100 : 0
     },
-    tier: 'free',
+    tier: keyTier,
     limit: tier.requestsPerDay,
-    remaining: tier.requestsPerDay - usage.requests
+    remaining: tier.requestsPerDay > 0 ? tier.requestsPerDay - usage.requests : -1
   };
 }
 

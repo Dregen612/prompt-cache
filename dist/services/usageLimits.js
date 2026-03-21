@@ -1,10 +1,11 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TIERS = void 0;
-exports.getUsage = getUsage;
 exports.recordRequest = recordRequest;
 exports.getUsageStats = getUsageStats;
 exports.getAllUsageStats = getAllUsageStats;
+// Usage Limits & Tier Management
+const apiKeys_1 = require("./apiKeys");
 exports.TIERS = {
     free: {
         name: 'Free',
@@ -43,11 +44,12 @@ function getUsage(key) {
     return todayRecord;
 }
 function recordRequest(key, isCacheHit = false) {
-    const usage = getUsage(key);
-    // Get tier for this key (default to free)
-    const keyTier = 'free'; // Would look up from DB
+    // Look up the actual tier from the API key
+    const keyInfo = (0, apiKeys_1.validateAPIKey)(key);
+    const keyTier = keyInfo.valid && keyInfo.apiKey ? keyInfo.apiKey.tier : 'free';
     const tier = exports.TIERS[keyTier];
-    // Check limits
+    const usage = getUsage(key);
+    // Check limits (unlimited = -1)
     if (tier.requestsPerDay > 0 && usage.requests >= tier.requestsPerDay) {
         return { allowed: false, remaining: 0, tier: keyTier };
     }
@@ -59,17 +61,19 @@ function recordRequest(key, isCacheHit = false) {
     return { allowed: true, remaining, tier: keyTier };
 }
 function getUsageStats(key) {
+    const keyInfo = (0, apiKeys_1.validateAPIKey)(key);
+    const keyTier = keyInfo.valid && keyInfo.apiKey ? keyInfo.apiKey.tier : 'free';
+    const tier = exports.TIERS[keyTier];
     const usage = getUsage(key);
-    const tier = exports.TIERS['free'];
     return {
         today: {
             requests: usage.requests,
             cacheHits: usage.cacheHits,
             hitRate: usage.requests > 0 ? (usage.cacheHits / usage.requests) * 100 : 0
         },
-        tier: 'free',
+        tier: keyTier,
         limit: tier.requestsPerDay,
-        remaining: tier.requestsPerDay - usage.requests
+        remaining: tier.requestsPerDay > 0 ? tier.requestsPerDay - usage.requests : -1
     };
 }
 function getAllUsageStats() {

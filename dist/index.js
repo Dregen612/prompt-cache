@@ -1093,6 +1093,48 @@ app.get('/cache/key/:key', async (req, res) => {
     });
 });
 // Get cached prompt (rate limited: 200 req/min)
+// Get total cache entry count
+app.get('/cache/count', async (req, res) => {
+    const model = req.query.model;
+    let count = 0;
+    let backend = getBackend();
+    if (backend === 'pg') {
+        try {
+            const result = model
+                ? await pgCache_1.pool.query('SELECT COUNT(*) FROM prompt_cache WHERE model = $1 AND created_at + ttl > $2', [model, Date.now()])
+                : await pgCache_1.pool.query('SELECT COUNT(*) FROM prompt_cache WHERE created_at + ttl > $1', [Date.now()]);
+            count = parseInt(result.rows[0].count);
+        }
+        catch { }
+    }
+    else if (backend === 'redis' && redis) {
+        try {
+            const keys = await redis.keys('prompt:*');
+            for (const key of keys) {
+                const data = await redis.get(key);
+                if (data) {
+                    const entry = JSON.parse(data);
+                    if (!model || entry.model === model) {
+                        if (Date.now() <= entry.createdAt + entry.ttl) {
+                            count++;
+                        }
+                    }
+                }
+            }
+        }
+        catch { }
+    }
+    else {
+        for (const entry of memoryCache.values()) {
+            if (!model || entry.model === model) {
+                if (Date.now() <= entry.createdAt + entry.ttl) {
+                    count++;
+                }
+            }
+        }
+    }
+    res.json({ count, model: model || 'all', backend });
+});
 app.get('/cache/:prompt(*)', (0, rateLimit_1.rateLimiter)({ windowMs: 60000, maxRequests: 200 }), async (req, res) => {
     const startTime = Date.now();
     const apiKey = req.headers['x-api-key'];
@@ -1465,124 +1507,6 @@ app.patch('/cache/:prompt(*)', async (req, res) => {
     }
     res.json({ success: true, key, newTtl: ttl });
 });
-// Clear cache by model
-app.delete('/cache/model/:model', async (req, res) => {
-    const { model } = req.params;
-    if (!model) {
-        return res.status(400).json({ error: 'model parameter required' });
-    }
-    let cleared = 0;
-    if ((0, pgCache_1.isPgAvailable)()) {
-        cleared = await (0, pgCache_1.pgClearByModel)(model);
-    }
-    else if (useRedis && redis) {
-        try {
-            const keys = await redis.keys(`prompt:*`);
-            let deleted = 0;
-            for (const key of keys) {
-                const data = await redis.get(key);
-                if (data) {
-                    const entry = JSON.parse(data);
-                    if (entry.model === model) {
-                        await redis.del(key);
-                        deleted++;
-                    }
-                }
-            }
-            cleared = deleted;
-        }
-        catch { }
-    }
-    else {
-        for (const [key, entry] of memoryCache.entries()) {
-            if (entry.model === model) {
-                memoryCache.delete(key);
-                cleared++;
-            }
-        }
-    }
-    res.json({ success: true, model, cleared });
-});
-// List all cache keys
-app.get('/cache/keys', async (req, res) => {
-    const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
-    const offset = parseInt(req.query.offset) || 0;
-    let keys = [];
-    let backend = 'memory';
-    if ((0, pgCache_1.isPgAvailable)()) {
-        keys = await (0, pgCache_1.pgGetKeys)(limit, offset);
-        backend = 'pg';
-    }
-    else if (useRedis && redis) {
-        try {
-            const allKeys = await redis.keys('prompt:*');
-            const paginatedKeys = allKeys.slice(offset, offset + limit);
-            for (const k of paginatedKeys) {
-                const data = await redis.get(k);
-                if (data) {
-                    const entry = JSON.parse(data);
-                    keys.push({
-                        key: k.replace('prompt:', ''),
-                        model: entry.model,
-                        hits: entry.hits,
-                        createdAt: entry.createdAt,
-                        ttl: entry.ttl
-                    });
-                }
-            }
-            backend = 'redis';
-        }
-        catch { }
-    }
-    else {
-        let i = 0;
-        for (const [key, entry] of memoryCache) {
-            if (i >= offset && i < offset + limit) {
-                keys.push({ key, model: entry.model, hits: entry.hits, createdAt: entry.createdAt, ttl: entry.ttl });
-            }
-            i++;
-        }
-        backend = 'memory';
-    }
-    res.json({ keys, backend, limit, offset, count: keys.length });
-});
-// Get cache stats by model
-app.get('/cache/stats/by-model', async (req, res) => {
-    let stats = {};
-    let backend = getBackend();
-    if (backend === 'pg') {
-        stats = await (0, pgCache_1.pgStatsByModel)();
-    }
-    else if (backend === 'redis' && redis) {
-        try {
-            const keys = await redis.keys('prompt:*');
-            for (const key of keys) {
-                const data = await redis.get(key);
-                if (data) {
-                    const entry = JSON.parse(data);
-                    const model = entry.model || 'unknown';
-                    if (!stats[model]) {
-                        stats[model] = { count: 0, hits: 0 };
-                    }
-                    stats[model].count++;
-                    stats[model].hits += entry.hits || 0;
-                }
-            }
-        }
-        catch { }
-    }
-    else {
-        for (const entry of memoryCache.values()) {
-            const model = entry.model || 'unknown';
-            if (!stats[model]) {
-                stats[model] = { count: 0, hits: 0 };
-            }
-            stats[model].count++;
-            stats[model].hits += entry.hits || 0;
-        }
-    }
-    res.json({ stats, backend });
-});
 // Stripe checkout session
 app.post('/checkout', async (req, res) => {
     const { tier, customerId, email } = req.body;
@@ -1729,63 +1653,6 @@ app.post('/webhook/stripe', express_1.default.raw({ type: 'application/json' }),
         console.error('Webhook error:', error.message);
         res.status(400).json({ error: error.message });
     }
-});
-// Get cached entry content by key (for debugging/inspection)
-app.get('/cache/key/:key', async (req, res) => {
-    const { key } = req.params;
-    if (!key || key.length < 8) {
-        return res.status(400).json({ error: 'Valid cache key required' });
-    }
-    let entry = null;
-    let backend = 'memory';
-    // Try PostgreSQL first
-    if ((0, pgCache_1.isPgAvailable)()) {
-        entry = await (0, pgCache_1.pgGet)(key);
-        if (entry)
-            backend = 'pg';
-    }
-    // Try Redis
-    if (!entry && useRedis && redis) {
-        try {
-            const data = await redis.get(`prompt:${key}`);
-            if (data) {
-                entry = JSON.parse(data);
-                backend = 'redis';
-            }
-        }
-        catch { }
-    }
-    // Try memory
-    if (!entry) {
-        entry = memoryCache.get(key) || null;
-        if (entry)
-            backend = 'memory';
-    }
-    if (!entry) {
-        return res.status(404).json({ error: 'Cache entry not found' });
-    }
-    // Check if expired
-    if (isExpired(entry)) {
-        if ((0, pgCache_1.isPgAvailable)())
-            await (0, pgCache_1.pgDel)(key);
-        else if (useRedis && redis)
-            await redis.del(`prompt:${key}`);
-        else
-            memoryCache.delete(key);
-        return res.status(404).json({ error: 'Cache entry expired' });
-    }
-    res.json({
-        key,
-        prompt: entry.prompt,
-        response: entry.response,
-        model: entry.model,
-        hits: entry.hits,
-        createdAt: entry.createdAt,
-        age: Date.now() - entry.createdAt,
-        ttl: entry.ttl,
-        expiresIn: entry.ttl - (Date.now() - entry.createdAt),
-        backend
-    });
 });
 app.listen(PORT, () => {
     console.log(`🚀 PromptCache running on port ${PORT}`);

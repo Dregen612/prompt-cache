@@ -8,13 +8,6 @@ export interface Tier {
 export declare const TIERS: {
     [key: string]: Tier;
 };
-interface UsageRecord {
-    key: string;
-    date: string;
-    requests: number;
-    cacheHits: number;
-}
-export declare function getUsage(key: string): UsageRecord;
 export declare function recordRequest(key: string, isCacheHit?: boolean): {
     allowed: boolean;
     remaining: number;
@@ -36,5 +29,4 @@ export declare function getAllUsageStats(): {
     hits: number;
     hitRate: number;
 }[];
-export {};
 //# sourceMappingURL=usageLimits.d.ts.map

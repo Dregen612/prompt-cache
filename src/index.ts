@@ -7,6 +7,8 @@ import { apiKeyAuth, optionalApiKeyAuth } from './middleware/apiKeyAuth';
 import { rateLimiter } from './middleware/rateLimit';
 import { recordRequest, getUsageStats, TIERS } from './services/usageLimits';
 import { analytics } from './services/analytics';
+import { extractPromptDNA, explainDNA, calculateSimilarity, findSimilarPrompts } from './services/promptDNA';
+import { TEMPLATES, applyTemplate, transformResponse } from './services/templates';
 
 // Stripe setup
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder', {
@@ -205,7 +207,7 @@ app.post('/cache/stream', async (req, res) => {
     return res.status(429).json({ error: 'Daily limit exceeded', tier: usage.tier, remaining: 0 });
   }
 
-  const { prompt, model = 'gpt-4', llmEndpoint, llmKey, ttl = 3600000 } = req.body;
+  const { prompt, model = 'gpt-4', llmEndpoint, llmKey, ttl = 3600000, template, uppercase, lowercase, trim = true, escape } = req.body;
 
   if (!prompt) {
     return res.status(400).json({ error: 'prompt required' });
@@ -246,7 +248,11 @@ app.post('/cache/stream', async (req, res) => {
     res.write(`data: ${JSON.stringify({ cached: true, key, model: entry.model, age, hits: entry.hits + 1, backend: getBackend() })}\n\n`);
 
     // Stream the response word-by-word with slight delays for realism
-    const words = entry.response.split(' ');
+    let streamedResponse = entry.response;
+    if (template || uppercase || lowercase || escape) {
+      streamedResponse = transformResponse(streamedResponse, { template, uppercase, lowercase, trim, escape });
+    }
+    const words = streamedResponse.split(' ');
     for (let i = 0; i < words.length; i++) {
       res.write(`event: chunk\n`);
       res.write(`data: ${JSON.stringify({ text: words[i] + (i < words.length - 1 ? ' ' : ''), done: false })}\n\n`);
@@ -900,6 +906,91 @@ app.get('/cache/similar/:prompt(*)', optionalApiKeyAuth, async (req, res) => {
   });
 });
 
+// List all available response templates
+app.get('/cache/templates', optionalApiKeyAuth, (req, res) => {
+  const format = req.query.format as string;
+  
+  if (format === 'ids') {
+    return res.json({ templates: TEMPLATES.map(t => t.id) });
+  }
+  
+  res.json({
+    templates: TEMPLATES.map(t => ({
+      id: t.id,
+      name: t.name,
+      description: t.description,
+      format: t.format,
+    })),
+    count: TEMPLATES.length
+  });
+});
+
+// Analyze a prompt's DNA - fingerprint + category + complexity + similar cached entries
+app.post('/cache/analyze', optionalApiKeyAuth, async (req, res) => {
+  const { prompt } = req.body;
+  
+  if (!prompt || typeof prompt !== 'string' || prompt.trim().length < 3) {
+    return res.status(400).json({ error: 'prompt (string, min 3 chars) is required' });
+  }
+  
+  const dna = extractPromptDNA(prompt);
+  
+  // Find similar cached entries using prompt DNA
+  let similarPrompts: Array<{ prompt: string; similarity: number; response: string; model: string }> = [];
+  
+  if (isPgAvailable() && isVectorAvailable()) {
+    try {
+      const pgSimilar = await pgFindSimilar(prompt, 5);
+      similarPrompts = pgSimilar.map(e => ({
+        prompt: e.prompt,
+        response: e.response,
+        model: e.model,
+        similarity: Math.round(e.similarity * 100) / 100
+      }));
+    } catch {}
+  }
+  
+  // Also try in-memory DNA-based search across memory cache
+  if (similarPrompts.length === 0) {
+    const targetDNA = dna;
+    for (const [key, entry] of memoryCache) {
+      if (isExpired(entry)) continue;
+      const entryDNA = extractPromptDNA(entry.prompt);
+      const sim = calculateSimilarity(targetDNA, entryDNA);
+      if (sim >= 0.5) {
+        similarPrompts.push({
+          prompt: entry.prompt,
+          response: entry.response,
+          model: entry.model,
+          similarity: Math.round(sim * 100) / 100
+        });
+      }
+    }
+    similarPrompts.sort((a, b) => b.similarity - a.similarity);
+    similarPrompts = similarPrompts.slice(0, 5);
+  }
+  
+  res.json({
+    prompt,
+    dna: {
+      fingerprint: dna.dna,
+      category: dna.category,
+      complexity: dna.complexity,
+      complexityLabel: ['Very Simple', 'Simple', 'Basic', 'Intermediate', 'Advanced', 'Complex', 'Very Complex', 'Expert', 'Specialized', 'Highly Specialized', 'Cutting Edge'][dna.complexity],
+      keywords: dna.keywords,
+      length: dna.length
+    },
+    similarPrompts,
+    templates: {
+      suggested: dna.category === 'code' ? ['json', 'markdown-list'] 
+        : dna.category === 'write' ? ['markdown-list', 'html-wrapper', 'json-structured']
+        : dna.category === 'creative' ? ['markdown-list', 'text-plain']
+        : ['json', 'markdown-list', 'text-plain'],
+      available: TEMPLATES.map(t => t.id)
+    }
+  });
+});
+
 // Refresh TTL - extend expiration of existing cache entry
 app.put('/cache/refresh', optionalApiKeyAuth, async (req, res) => {
   const { prompt, ttl } = req.body;
@@ -1247,14 +1338,20 @@ app.get('/cache/:prompt(*)', rateLimiter({ windowMs: 60000, maxRequests: 200 }),
       await pgSet(key, entry);
       const latency = Date.now() - startTime;
       analytics.recordRequest(true, latency, entry.model);
-      return res.json({ 
-        cached: true, 
-        response: entry.response, 
-        model: entry.model,
-        hits: entry.hits,
-        age: Date.now() - entry.createdAt,
-        backend: 'pg'
-      });
+      const pgTransform = {
+        uppercase: req.query.uppercase === 'true',
+        lowercase: req.query.lowercase === 'true',
+        trim: req.query.trim !== 'false',
+        escape: req.query.escape === 'true',
+      };
+      const pgTemplateId = req.query.template as string;
+      let pgResponse = entry.response;
+      if (pgTemplateId || pgTransform.uppercase || pgTransform.lowercase || pgTransform.escape) {
+        pgResponse = transformResponse(entry.response, { ...pgTransform, template: pgTemplateId });
+      }
+      const pgResult: any = { cached: true, response: pgResponse, model: entry.model, hits: entry.hits, age: Date.now() - entry.createdAt, backend: 'pg' };
+      if (pgTemplateId) { pgResult.template = pgTemplateId; pgResult.formatted = true; }
+      return res.json(pgResult);
     }
   }
 
@@ -1321,14 +1418,36 @@ app.get('/cache/:prompt(*)', rateLimiter({ windowMs: 60000, maxRequests: 200 }),
 
   const latency = Date.now() - startTime;
   analytics.recordRequest(true, latency, entry.model);
-  res.json({ 
-    cached: true, 
-    response: entry.response, 
+
+  // Apply template/format if requested
+  const templateId = req.query.template as string;
+  const transform = {
+    uppercase: req.query.uppercase === 'true',
+    lowercase: req.query.lowercase === 'true',
+    trim: req.query.trim !== 'false', // default true
+    escape: req.query.escape === 'true',
+  };
+
+  let response = entry.response;
+  if (templateId || transform.uppercase || transform.lowercase || transform.escape) {
+    response = transformResponse(entry.response, { ...transform, template: templateId });
+  }
+
+  const result: any = {
+    cached: true,
+    response,
     model: entry.model,
     hits: entry.hits,
     age: Date.now() - entry.createdAt,
     backend: getBackend()
-  });
+  };
+
+  if (templateId) {
+    result.template = templateId;
+    result.formatted = true;
+  }
+
+  res.json(result);
 });
 
 // ===== Request Deduplication Endpoints =====

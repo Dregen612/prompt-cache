@@ -9,6 +9,8 @@ import { recordRequest, getUsageStats, TIERS } from './services/usageLimits';
 import { analytics } from './services/analytics';
 import { extractPromptDNA, explainDNA, calculateSimilarity, findSimilarPrompts } from './services/promptDNA';
 import { TEMPLATES, applyTemplate, transformResponse } from './services/templates';
+import { webhookNotifier } from './services/webhooks';
+import { healthMonitor } from './services/healthMonitor';
 
 // Stripe setup
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder', {
@@ -1918,7 +1920,84 @@ setInterval(async () => {
   }
 }, CLEANUP_INTERVAL);
 
-// Stripe webhook
+// ===== Webhook Configuration =====
+app.post('/webhooks', async (req, res) => {
+  const { url } = req.body;
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ error: 'url required' });
+  }
+  try {
+    new URL(url);
+  } catch {
+    return res.status(400).json({ error: 'Invalid URL format' });
+  }
+  webhookNotifier.setWebhook(url);
+  res.json({ success: true, url, message: 'Webhook URL configured' });
+});
+
+app.get('/webhooks', (req, res) => {
+  const stats = webhookNotifier.getStats();
+  const recent = webhookNotifier.getEvents(10);
+  res.json({
+    configured: webhookNotifier.getWebhook() !== null,
+    url: webhookNotifier.getWebhook(),
+    stats,
+    recentEvents: recent.map(e => ({ type: e.type, timestamp: e.timestamp, data: e.data })),
+  });
+});
+
+app.delete('/webhooks', (req, res) => {
+  webhookNotifier.clearWebhook();
+  res.json({ success: true, message: 'Webhook cleared' });
+});
+
+app.post('/webhooks/test', async (req, res) => {
+  const result = await webhookNotifier.notifyCacheHit({
+    test: true,
+    message: 'Test event from PromptCache',
+    timestamp: Date.now(),
+  });
+  res.json({ success: result.success, error: result.error });
+});
+
+// ===== Enhanced Health & Monitoring =====
+app.get('/health/detailed', async (req, res) => {
+  const memSize = memoryCache.size;
+  let redisSize = 0;
+  let pgSize = 0;
+
+  if (useRedis && redis) {
+    try { redisSize = await redis.dbsize(); } catch {}
+  }
+
+  if (isPgAvailable()) {
+    try {
+      const pg = await pgStats();
+      pgSize = pg.entries;
+    } catch {}
+  }
+
+  const summary = healthMonitor.getSummary();
+
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: summary.uptime,
+    cache: {
+      backend: getBackend(),
+      pgEntries: pgSize,
+      redisEntries: redisSize,
+      memoryEntries: memSize,
+    },
+    recent: summary.recent,
+    history: summary.history,
+    webhook: {
+      configured: webhookNotifier.getWebhook() !== null,
+    },
+  });
+});
+
+// ===== Stripe webhook
 app.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
   const signature = req.headers['stripe-signature'] as string;
   

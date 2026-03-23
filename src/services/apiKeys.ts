@@ -84,6 +84,12 @@ export function getAPIKey(key: string): APIKey | undefined {
   return apiKeys.get(key);
 }
 
+// Get tier for an API key (undefined if not found/invalid)
+export function getAPIKeyTier(key: string): 'free' | 'pro' | 'enterprise' | undefined {
+  const apiKey = apiKeys.get(key);
+  return apiKey?.tier;
+}
+
 // Revoke key
 export function revokeAPIKey(key: string): boolean {
   const apiKey = apiKeys.get(key);

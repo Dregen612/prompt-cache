@@ -6,19 +6,21 @@ interface RequestLog {
   latency: number;
   model?: string;
   error?: boolean;
+  apiKey?: string;
 }
 
 class AnalyticsTracker {
   private requests: RequestLog[] = [];
   private readonly MAX_REQUESTS = 10000; // Keep last 10k
 
-  recordRequest(cached: boolean, latency: number, model?: string, error = false) {
+  recordRequest(cached: boolean, latency: number, model?: string, error = false, apiKey?: string) {
     this.requests.push({
       timestamp: Date.now(),
       cached,
       latency,
       model,
-      error
+      error,
+      apiKey,
     });
 
     // Trim old requests

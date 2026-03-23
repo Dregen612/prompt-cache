@@ -8,6 +8,7 @@ exports.validateAPIKey = validateAPIKey;
 exports.recordRequest = recordRequest;
 exports.getAllAPIKeys = getAllAPIKeys;
 exports.getAPIKey = getAPIKey;
+exports.getAPIKeyTier = getAPIKeyTier;
 exports.revokeAPIKey = revokeAPIKey;
 exports.resetDailyLimits = resetDailyLimits;
 // API Key Management for PromptCache
@@ -67,6 +68,11 @@ function getAllAPIKeys() {
 // Get key by key string
 function getAPIKey(key) {
     return apiKeys.get(key);
+}
+// Get tier for an API key (undefined if not found/invalid)
+function getAPIKeyTier(key) {
+    const apiKey = apiKeys.get(key);
+    return apiKey?.tier;
 }
 // Revoke key
 function revokeAPIKey(key) {

@@ -1,7 +1,7 @@
 declare class AnalyticsTracker {
     private requests;
     private readonly MAX_REQUESTS;
-    recordRequest(cached: boolean, latency: number, model?: string, error?: boolean): void;
+    recordRequest(cached: boolean, latency: number, model?: string, error?: boolean, apiKey?: string): void;
     getAnalytics(period?: '1h' | '24h' | '7d' | '30d'): {
         period: "1h" | "24h" | "7d" | "30d";
         totalRequests: number;

@@ -7,13 +7,14 @@ class AnalyticsTracker {
         this.requests = [];
         this.MAX_REQUESTS = 10000; // Keep last 10k
     }
-    recordRequest(cached, latency, model, error = false) {
+    recordRequest(cached, latency, model, error = false, apiKey) {
         this.requests.push({
             timestamp: Date.now(),
             cached,
             latency,
             model,
-            error
+            error,
+            apiKey,
         });
         // Trim old requests
         if (this.requests.length > this.MAX_REQUESTS) {

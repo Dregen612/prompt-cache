@@ -3,6 +3,20 @@ import Redis from 'ioredis';
 import crypto from 'crypto';
 import Stripe from 'stripe';
 import { initPgCache, isPgAvailable, isVectorAvailable, pgSet, pgGet, pgDel, pgClear, pgStats, pgCleanup, pgSemanticSearch, pgFindSimilar, pgClearByModel, pgGetKeys, pgStatsByModel, pgPrefixSearch, pgRefreshTTL, CacheEntry, pool } from './services/pgCache';
+import {
+  estimateTokens,
+  estimateContextUtilization,
+  shouldCompact,
+  compactContext,
+  orderForKVCaching,
+  maskObservation,
+  autoMaskToolOutputs,
+  partitionContext,
+  shouldPartition,
+  generateOptimizationReport,
+  type OptimizationReport,
+  type KVCachePrompt,
+} from './middleware/contextOptimization';
 import { apiKeyAuth, optionalApiKeyAuth } from './middleware/apiKeyAuth';
 import { rateLimiter } from './middleware/rateLimit';
 import { recordRequest, getUsageStats, TIERS } from './services/usageLimits';
@@ -11,6 +25,8 @@ import { extractPromptDNA, explainDNA, calculateSimilarity, findSimilarPrompts }
 import { TEMPLATES, applyTemplate, transformResponse } from './services/templates';
 import { webhookNotifier } from './services/webhooks';
 import { healthMonitor } from './services/healthMonitor';
+import { createAnalyticsRouter, recordAnalytics } from './services/analyticsRouter';
+import { getAPIKeyTier } from './services/apiKeys';
 
 // Stripe setup
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder', {
@@ -274,7 +290,8 @@ app.post('/cache/stream', async (req, res) => {
     }
 
     const latency = Date.now() - startTime;
-    analytics.recordRequest(true, latency, entry.model);
+    analytics.recordRequest(true, latency, entry.model, false, apiKey);
+    recordAnalytics(apiKey, true, latency, entry.model);
 
     res.write(`event: done\n`);
     res.write(`data: ${JSON.stringify({ latency, cached: true })}\n\n`);
@@ -376,7 +393,8 @@ app.post('/cache/stream', async (req, res) => {
     }
 
     const latency = Date.now() - startTime;
-    analytics.recordRequest(false, latency, model);
+    analytics.recordRequest(false, latency, model, false, apiKey);
+    recordAnalytics(apiKey, false, latency, model);
 
     res.write(`event: done\n`);
     res.write(`data: ${JSON.stringify({ latency, cached: false, key, fullResponse: fullResponse.length })}\n\n`);
@@ -1339,7 +1357,8 @@ app.get('/cache/:prompt(*)', rateLimiter({ windowMs: 60000, maxRequests: 200 }),
       entry.hits++;
       await pgSet(key, entry);
       const latency = Date.now() - startTime;
-      analytics.recordRequest(true, latency, entry.model);
+      analytics.recordRequest(true, latency, entry.model, false, apiKey);
+      recordAnalytics(apiKey, true, latency, entry.model);
       const pgTransform = {
         uppercase: req.query.uppercase === 'true',
         lowercase: req.query.lowercase === 'true',
@@ -1375,7 +1394,8 @@ app.get('/cache/:prompt(*)', rateLimiter({ windowMs: 60000, maxRequests: 200 }),
       const semanticEntry = await pgSemanticSearch(req.params.prompt);
       if (semanticEntry) {
         const latency = Date.now() - startTime;
-        analytics.recordRequest(true, latency, semanticEntry.model);
+        analytics.recordRequest(true, latency, semanticEntry.model, false, apiKey);
+        recordAnalytics(apiKey, true, latency, semanticEntry.model);
         return res.json({
           cached: true,
           semantic: true,
@@ -1389,7 +1409,8 @@ app.get('/cache/:prompt(*)', rateLimiter({ windowMs: 60000, maxRequests: 200 }),
       }
     }
     const latency = Date.now() - startTime;
-    analytics.recordRequest(false, latency, req.query.model as string);
+    analytics.recordRequest(false, latency, req.query.model as string, false, apiKey);
+    recordAnalytics(apiKey, false, latency, req.query.model as string);
     return res.json({ cached: false });
   }
 
@@ -1403,7 +1424,8 @@ app.get('/cache/:prompt(*)', rateLimiter({ windowMs: 60000, maxRequests: 200 }),
       memoryCache.delete(key);
     }
     const latency = Date.now() - startTime;
-    analytics.recordRequest(false, latency, entry.model);
+    analytics.recordRequest(false, latency, entry.model, false, apiKey);
+    recordAnalytics(apiKey, false, latency, entry.model);
     return res.json({ cached: false, expired: true });
   }
 
@@ -1419,7 +1441,8 @@ app.get('/cache/:prompt(*)', rateLimiter({ windowMs: 60000, maxRequests: 200 }),
   }
 
   const latency = Date.now() - startTime;
-  analytics.recordRequest(true, latency, entry.model);
+  analytics.recordRequest(true, latency, entry.model, false, apiKey);
+  recordAnalytics(apiKey, true, latency, entry.model);
 
   // Apply template/format if requested
   const templateId = req.query.template as string;
@@ -2020,6 +2043,288 @@ app.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (re
   }
 });
 
+// ═══════════════════════════════════════════════════════════════
+// CONTEXT OPTIMIZATION ENDPOINTS
+// Based on: https://github.com/muratcankoylan/agent-skills-for-context-engineering
+// Stacks with PromptCache: PromptCache caches WHAT, Context Opt reduces HOW MUCH
+// ═══════════════════════════════════════════════════════════════
+
+// ─── Token Estimation & Context Stats ────────────────────────────────────────
+
+app.post('/context/estimate', optionalApiKeyAuth, async (req, res) => {
+  const { texts } = req.body;
+  
+  if (!Array.isArray(texts)) {
+    return res.status(400).json({ error: 'texts array required' });
+  }
+  
+  const tokens = texts.map((t) => estimateTokens(String(t)));
+  const total = tokens.reduce((a, b) => a + b, 0);
+  const utilization = estimateContextUtilization(texts);
+  const contextLimit = 128000; // Standard context window
+
+  res.json({
+    tokensPerText: tokens,
+    totalTokens: total,
+    utilizationPercent: Math.round(utilization * 100),
+    contextLimit,
+    compactTriggered: shouldCompact(total, contextLimit),
+    partitionRecommended: shouldPartition(total, contextLimit, 3),
+    strategies: [
+      { name: "KV-cache ordering", applicable: true, hitRateBoost: "70%+ on stable prompts" },
+      { name: "Observation masking", applicable: utilization > 0.5, reduction: "60-80% on masked obs" },
+      { name: "Compaction", applicable: utilization > 0.7, reduction: "50-70%" },
+      { name: "Partitioning", applicable: utilization > 0.6, overhead: "~500 tokens" },
+    ],
+  });
+});
+
+// ─── KV-Cache Optimization ───────────────────────────────────────────────────
+
+app.post('/context/kvcache-order', optionalApiKeyAuth, async (req, res) => {
+  const { system, tools, templates, history, query } = req.body as KVCachePrompt;
+  
+  if (!query) {
+    return res.status(400).json({ error: 'query is required' });
+  }
+  
+  const ordered = orderForKVCaching({ system: system || "", tools: tools || "", templates: templates || "", history: history || "", query });
+  const originalTokens = estimateTokens([system, tools, templates, history, query].filter(Boolean).join("\n"));
+  const orderedTokens = estimateTokens(ordered);
+
+  res.json({
+    ordered,
+    originalTokens,
+    orderedTokens,
+    cacheStabilityNote: "Stable content (system, tools) now in prefix for maximum KV-cache hit rate",
+    rule: "System (no timestamps) → Tools → Templates → History → Query (always last)",
+  });
+});
+
+// ─── Observation Masking ─────────────────────────────────────────────────────
+
+app.post('/context/mask', optionalApiKeyAuth, async (req, res) => {
+  const { content, summary } = req.body;
+  
+  if (!content) {
+    return res.status(400).json({ error: 'content required' });
+  }
+  
+  const autoSummary = summary || extractKeyFromContent(content);
+  const masked = maskObservation(content, autoSummary);
+
+  res.json({
+    original: content.slice(0, 200) + (content.length > 200 ? "..." : ""),
+    originalLength: content.length,
+    maskedReference: `[Obs:${masked.refId} elided. Key: ${masked.summary}. Full content retrievable.]`,
+    maskedLength: masked.maskedLength,
+    reductionPercent: masked.reduction,
+    refId: masked.refId,
+    note: "Store refId in context. Retrieve with GET /context/observe/:refId",
+  });
+});
+
+app.get('/context/observe/:refId', optionalApiKeyAuth, async (req, res) => {
+  const { refId } = req.params;
+  const content = maskObservationRetrieval(refId);
+  
+  if (!content) {
+    return res.status(404).json({ error: 'Observation not found or expired' });
+  }
+  
+  res.json({ refId, content, retrieved: true });
+});
+
+app.post('/context/auto-mask', optionalApiKeyAuth, async (req, res) => {
+  const { outputs } = req.body;
+  
+  if (!Array.isArray(outputs)) {
+    return res.status(400).json({ error: 'outputs array required' });
+  }
+  
+  const results = autoMaskToolOutputs(outputs, 3, 500);
+  
+  res.json({
+    total: results.length,
+    masked: results.filter((r) => r.masked).length,
+    results: results.map((r) => ({
+      masked: r.masked,
+      preview: r.content?.slice(0, 150) + (r.content && r.content.length > 150 ? "..." : ""),
+      ref: r.ref ? { refId: r.ref.refId, reductionPercent: r.ref.reduction } : null,
+    })),
+  });
+});
+
+// ─── Compaction ──────────────────────────────────────────────────────────────
+
+app.post('/context/compact', optionalApiKeyAuth, async (req, res) => {
+  const { messages, triggerOnly } = req.body;
+  
+  if (!Array.isArray(messages)) {
+    return res.status(400).json({ error: 'messages array required' });
+  }
+  
+  const contextLimit = 128000;
+  const totalTokens = messages.reduce((sum, m) => sum + estimateTokens(String(m.content || "")), 0);
+  const utilization = totalTokens / contextLimit;
+
+  if (triggerOnly) {
+    return res.json({
+      totalTokens,
+      utilizationPercent: Math.round(utilization * 100),
+      compactTriggered: shouldCompact(totalTokens, contextLimit),
+      threshold: "70%",
+      message: shouldCompact(totalTokens, contextLimit)
+        ? "Compaction recommended — context utilization above 70%"
+        : "Context utilization within acceptable range",
+    });
+  }
+
+  // Perform compaction using local summarization
+  const summary = await summarizeMessages(messages);
+  const compactedTokens = estimateTokens(summary);
+  const report = generateOptimizationReport(totalTokens, compactedTokens, ["compaction"]);
+
+  res.json({
+    originalTokens: totalTokens,
+    compactedTokens,
+    reductionPercent: report.reductions[0],
+    summary,
+    report,
+    strategies: {
+      "1_KV_cache_order": "reorder prompts so system/tools are in prefix",
+      "2_observation_masking": "compress old verbose tool outputs",
+      "3_compaction": "summarize accumulated context",
+      "4_partitioning": "split across sub-agents if >60% load",
+    },
+    priorityOrder: "Apply in order: KV-cache first (zero risk), then masking, then compaction",
+  });
+});
+
+// ─── Partitioning ────────────────────────────────────────────────────────────
+
+app.post('/context/partition', optionalApiKeyAuth, async (req, res) => {
+  const { content, partitionCount } = req.body;
+  
+  if (!content) {
+    return res.status(400).json({ error: 'content required' });
+  }
+  
+  const count = Math.max(2, Math.min(10, partitionCount || 3));
+  const totalTokens = estimateTokens(content);
+  const contextLimit = 128000;
+
+  if (!shouldPartition(totalTokens, contextLimit, count)) {
+    return res.json({
+      recommended: false,
+      reason: totalTokens / contextLimit <= 0.6
+        ? "Context utilization below 60% — partitioning overhead not justified"
+        : `Need 3+ subtasks for partitioning to pay off (got ${count})`,
+      totalTokens,
+      utilizationPercent: Math.round((totalTokens / contextLimit) * 100),
+    });
+  }
+
+  const result = partitionContext(content, count);
+
+  res.json({
+    recommended: true,
+    partitions: result.partitions,
+    totalTokens: result.totalTokens,
+    coordinatorOverhead: result.coordinatorOverhead,
+    netSavings: result.netSavings,
+    tip: "Run each partition in a sub-agent with clean context, aggregate results in coordinator",
+  });
+});
+
+// ─── Optimization Report ─────────────────────────────────────────────────────
+
+app.get('/context/report', optionalApiKeyAuth, async (req, res) => {
+  const { beforeTokens, afterTokens, strategies } = req.query;
+  
+  const before = parseInt(beforeTokens as string) || 0;
+  const after = parseInt(afterTokens as string) || 0;
+  const stratList = strategies ? String(strategies).split(",") : ["KV-cache", "masking", "compaction"];
+
+  if (!beforeTokens || !afterTokens) {
+    // Return the optimization guide
+    return res.json({
+      guide: "Context Optimization — stacks with PromptCache",
+      promptCache: "Caches WHAT is said (responses)",
+      contextOpt: "Reduces HOW MUCH is said (tokens)",
+      strategies: [
+        { name: "KV-Cache Ordering", risk: "none", gain: "70%+ cache hit rate", implementation: "PUT system/tools first in prompt, query last" },
+        { name: "Observation Masking", risk: "low", gain: "60-80% reduction on masked obs", implementation: "POST /context/mask with content + summary" },
+        { name: "Compaction", risk: "medium", gain: "50-70% reduction", implementation: "POST /context/compact with messages array" },
+        { name: "Partitioning", risk: "medium", gain: "varies by task", implementation: "POST /context/partition with content + count" },
+      ],
+      quickStart: {
+        estimate: "POST /context/estimate with {texts: [...]}",
+        kvOptimize: "POST /context/kvcache-order with {system, tools, history, query}",
+        mask: "POST /context/mask with {content, summary}",
+        compact: "POST /context/compact with {messages: [...]}",
+        partition: "POST /context/partition with {content, count}",
+      },
+    });
+  }
+
+  const report = generateOptimizationReport(before, after, stratList);
+  res.json({ report });
+});
+
+// ─── Helper functions ────────────────────────────────────────────────────────
+
+function extractKeyFromContent(content: string): string {
+  const firstPart = content.split(/[.!?]/).slice(0, 2).join(".").trim();
+  const metrics = content.match(/\d+(?:\.\d+)?(?:%|ms|GB|MB|KB| tokens)?/g);
+  const metricStr = metrics ? ` Metrics: ${metrics.slice(0, 5).join(", ")}` : "";
+  return (firstPart + metricStr).slice(0, 200);
+}
+
+function maskObservationRetrieval(refId: string): string | null {
+  // Simple in-memory lookup for masked observations
+  const storeKey = `ctx_opt_obs_${refId}`;
+  const cached = memoryCache.get(storeKey);
+  return cached ? cached.response : null;
+}
+
+async function summarizeMessages(
+  messages: Array<{ role: string; content: string }>
+): Promise<string> {
+  // Lightweight local summarization using extraction
+  const decisions: string[] = [];
+  const facts: string[] = [];
+  
+  for (const msg of messages) {
+    const lower = msg.content.toLowerCase();
+    
+    // Extract decisions
+    if (/decided|chose|agreed|concluded|selected|final/i.test(lower)) {
+      decisions.push(msg.content.slice(0, 150));
+    }
+    
+    // Extract numeric facts
+    const numbers = msg.content.match(/\d+(?:\.\d+)?\s*(?:%|ms|GB|MB|KB|hours?|days?|users?|requests?)?/gi);
+    if (numbers && numbers.length > 0) {
+      facts.push(numbers.slice(0, 3).join(", "));
+    }
+  }
+
+  const summary = [
+    decisions.length > 0 ? `DECISIONS:\n${decisions.slice(0, 5).map((d, i) => `${i + 1}. ${d}`).join("\n")}` : null,
+    facts.length > 0 ? `KEY METRICS:\n${[...new Set(facts)].slice(0, 10).join("\n")}` : null,
+    `[Context compacted from ${messages.length} messages]`,
+  ].filter(Boolean).join("\n\n");
+
+  return summary || "[No extractable content — context was mostly filler]";
+}
+
+// ═══════════════════════════════════════════════════════════════
+
+// ─── Analytics API Router ─────────────────────────────────────────────────────
+app.use('/api/analytics', createAnalyticsRouter(getAPIKeyTier));
+
+// ─── Startup ─────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`🚀 PromptCache running on port ${PORT}`);
 });

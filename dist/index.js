@@ -41,10 +41,17 @@ const ioredis_1 = __importDefault(require("ioredis"));
 const crypto_1 = __importDefault(require("crypto"));
 const stripe_1 = __importDefault(require("stripe"));
 const pgCache_1 = require("./services/pgCache");
+const contextOptimization_1 = require("./middleware/contextOptimization");
 const apiKeyAuth_1 = require("./middleware/apiKeyAuth");
 const rateLimit_1 = require("./middleware/rateLimit");
 const usageLimits_1 = require("./services/usageLimits");
 const analytics_1 = require("./services/analytics");
+const promptDNA_1 = require("./services/promptDNA");
+const templates_1 = require("./services/templates");
+const webhooks_1 = require("./services/webhooks");
+const healthMonitor_1 = require("./services/healthMonitor");
+const analyticsRouter_1 = require("./services/analyticsRouter");
+const apiKeys_1 = require("./services/apiKeys");
 // Stripe setup
 const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder', {
     apiVersion: '2026-02-25.clover',
@@ -209,7 +216,7 @@ app.post('/cache/stream', async (req, res) => {
     if (!usage.allowed) {
         return res.status(429).json({ error: 'Daily limit exceeded', tier: usage.tier, remaining: 0 });
     }
-    const { prompt, model = 'gpt-4', llmEndpoint, llmKey, ttl = 3600000 } = req.body;
+    const { prompt, model = 'gpt-4', llmEndpoint, llmKey, ttl = 3600000, template, uppercase, lowercase, trim = true, escape } = req.body;
     if (!prompt) {
         return res.status(400).json({ error: 'prompt required' });
     }
@@ -242,7 +249,11 @@ app.post('/cache/stream', async (req, res) => {
         res.write(`event: meta\n`);
         res.write(`data: ${JSON.stringify({ cached: true, key, model: entry.model, age, hits: entry.hits + 1, backend: getBackend() })}\n\n`);
         // Stream the response word-by-word with slight delays for realism
-        const words = entry.response.split(' ');
+        let streamedResponse = entry.response;
+        if (template || uppercase || lowercase || escape) {
+            streamedResponse = (0, templates_1.transformResponse)(streamedResponse, { template, uppercase, lowercase, trim, escape });
+        }
+        const words = streamedResponse.split(' ');
         for (let i = 0; i < words.length; i++) {
             res.write(`event: chunk\n`);
             res.write(`data: ${JSON.stringify({ text: words[i] + (i < words.length - 1 ? ' ' : ''), done: false })}\n\n`);
@@ -262,7 +273,8 @@ app.post('/cache/stream', async (req, res) => {
             memoryCache.set(key, entry);
         }
         const latency = Date.now() - startTime;
-        analytics_1.analytics.recordRequest(true, latency, entry.model);
+        analytics_1.analytics.recordRequest(true, latency, entry.model, false, apiKey);
+        (0, analyticsRouter_1.recordAnalytics)(apiKey, true, latency, entry.model);
         res.write(`event: done\n`);
         res.write(`data: ${JSON.stringify({ latency, cached: true })}\n\n`);
         res.end();
@@ -353,7 +365,8 @@ app.post('/cache/stream', async (req, res) => {
             }
         }
         const latency = Date.now() - startTime;
-        analytics_1.analytics.recordRequest(false, latency, model);
+        analytics_1.analytics.recordRequest(false, latency, model, false, apiKey);
+        (0, analyticsRouter_1.recordAnalytics)(apiKey, false, latency, model);
         res.write(`event: done\n`);
         res.write(`data: ${JSON.stringify({ latency, cached: false, key, fullResponse: fullResponse.length })}\n\n`);
         res.end();
@@ -833,6 +846,83 @@ app.get('/cache/similar/:prompt(*)', apiKeyAuth_1.optionalApiKeyAuth, async (req
         backend: 'pg'
     });
 });
+// List all available response templates
+app.get('/cache/templates', apiKeyAuth_1.optionalApiKeyAuth, (req, res) => {
+    const format = req.query.format;
+    if (format === 'ids') {
+        return res.json({ templates: templates_1.TEMPLATES.map(t => t.id) });
+    }
+    res.json({
+        templates: templates_1.TEMPLATES.map(t => ({
+            id: t.id,
+            name: t.name,
+            description: t.description,
+            format: t.format,
+        })),
+        count: templates_1.TEMPLATES.length
+    });
+});
+// Analyze a prompt's DNA - fingerprint + category + complexity + similar cached entries
+app.post('/cache/analyze', apiKeyAuth_1.optionalApiKeyAuth, async (req, res) => {
+    const { prompt } = req.body;
+    if (!prompt || typeof prompt !== 'string' || prompt.trim().length < 3) {
+        return res.status(400).json({ error: 'prompt (string, min 3 chars) is required' });
+    }
+    const dna = (0, promptDNA_1.extractPromptDNA)(prompt);
+    // Find similar cached entries using prompt DNA
+    let similarPrompts = [];
+    if ((0, pgCache_1.isPgAvailable)() && (0, pgCache_1.isVectorAvailable)()) {
+        try {
+            const pgSimilar = await (0, pgCache_1.pgFindSimilar)(prompt, 5);
+            similarPrompts = pgSimilar.map(e => ({
+                prompt: e.prompt,
+                response: e.response,
+                model: e.model,
+                similarity: Math.round(e.similarity * 100) / 100
+            }));
+        }
+        catch { }
+    }
+    // Also try in-memory DNA-based search across memory cache
+    if (similarPrompts.length === 0) {
+        const targetDNA = dna;
+        for (const [key, entry] of memoryCache) {
+            if (isExpired(entry))
+                continue;
+            const entryDNA = (0, promptDNA_1.extractPromptDNA)(entry.prompt);
+            const sim = (0, promptDNA_1.calculateSimilarity)(targetDNA, entryDNA);
+            if (sim >= 0.5) {
+                similarPrompts.push({
+                    prompt: entry.prompt,
+                    response: entry.response,
+                    model: entry.model,
+                    similarity: Math.round(sim * 100) / 100
+                });
+            }
+        }
+        similarPrompts.sort((a, b) => b.similarity - a.similarity);
+        similarPrompts = similarPrompts.slice(0, 5);
+    }
+    res.json({
+        prompt,
+        dna: {
+            fingerprint: dna.dna,
+            category: dna.category,
+            complexity: dna.complexity,
+            complexityLabel: ['Very Simple', 'Simple', 'Basic', 'Intermediate', 'Advanced', 'Complex', 'Very Complex', 'Expert', 'Specialized', 'Highly Specialized', 'Cutting Edge'][dna.complexity],
+            keywords: dna.keywords,
+            length: dna.length
+        },
+        similarPrompts,
+        templates: {
+            suggested: dna.category === 'code' ? ['json', 'markdown-list']
+                : dna.category === 'write' ? ['markdown-list', 'html-wrapper', 'json-structured']
+                    : dna.category === 'creative' ? ['markdown-list', 'text-plain']
+                        : ['json', 'markdown-list', 'text-plain'],
+            available: templates_1.TEMPLATES.map(t => t.id)
+        }
+    });
+});
 // Refresh TTL - extend expiration of existing cache entry
 app.put('/cache/refresh', apiKeyAuth_1.optionalApiKeyAuth, async (req, res) => {
     const { prompt, ttl } = req.body;
@@ -1147,15 +1237,25 @@ app.get('/cache/:prompt(*)', (0, rateLimit_1.rateLimiter)({ windowMs: 60000, max
             entry.hits++;
             await (0, pgCache_1.pgSet)(key, entry);
             const latency = Date.now() - startTime;
-            analytics_1.analytics.recordRequest(true, latency, entry.model);
-            return res.json({
-                cached: true,
-                response: entry.response,
-                model: entry.model,
-                hits: entry.hits,
-                age: Date.now() - entry.createdAt,
-                backend: 'pg'
-            });
+            analytics_1.analytics.recordRequest(true, latency, entry.model, false, apiKey);
+            (0, analyticsRouter_1.recordAnalytics)(apiKey, true, latency, entry.model);
+            const pgTransform = {
+                uppercase: req.query.uppercase === 'true',
+                lowercase: req.query.lowercase === 'true',
+                trim: req.query.trim !== 'false',
+                escape: req.query.escape === 'true',
+            };
+            const pgTemplateId = req.query.template;
+            let pgResponse = entry.response;
+            if (pgTemplateId || pgTransform.uppercase || pgTransform.lowercase || pgTransform.escape) {
+                pgResponse = (0, templates_1.transformResponse)(entry.response, { ...pgTransform, template: pgTemplateId });
+            }
+            const pgResult = { cached: true, response: pgResponse, model: entry.model, hits: entry.hits, age: Date.now() - entry.createdAt, backend: 'pg' };
+            if (pgTemplateId) {
+                pgResult.template = pgTemplateId;
+                pgResult.formatted = true;
+            }
+            return res.json(pgResult);
         }
     }
     // Try Redis
@@ -1177,7 +1277,8 @@ app.get('/cache/:prompt(*)', (0, rateLimit_1.rateLimiter)({ windowMs: 60000, max
             const semanticEntry = await (0, pgCache_1.pgSemanticSearch)(req.params.prompt);
             if (semanticEntry) {
                 const latency = Date.now() - startTime;
-                analytics_1.analytics.recordRequest(true, latency, semanticEntry.model);
+                analytics_1.analytics.recordRequest(true, latency, semanticEntry.model, false, apiKey);
+                (0, analyticsRouter_1.recordAnalytics)(apiKey, true, latency, semanticEntry.model);
                 return res.json({
                     cached: true,
                     semantic: true,
@@ -1191,7 +1292,8 @@ app.get('/cache/:prompt(*)', (0, rateLimit_1.rateLimiter)({ windowMs: 60000, max
             }
         }
         const latency = Date.now() - startTime;
-        analytics_1.analytics.recordRequest(false, latency, req.query.model);
+        analytics_1.analytics.recordRequest(false, latency, req.query.model, false, apiKey);
+        (0, analyticsRouter_1.recordAnalytics)(apiKey, false, latency, req.query.model);
         return res.json({ cached: false });
     }
     // Check TTL
@@ -1206,7 +1308,8 @@ app.get('/cache/:prompt(*)', (0, rateLimit_1.rateLimiter)({ windowMs: 60000, max
             memoryCache.delete(key);
         }
         const latency = Date.now() - startTime;
-        analytics_1.analytics.recordRequest(false, latency, entry.model);
+        analytics_1.analytics.recordRequest(false, latency, entry.model, false, apiKey);
+        (0, analyticsRouter_1.recordAnalytics)(apiKey, false, latency, entry.model);
         return res.json({ cached: false, expired: true });
     }
     entry.hits++;
@@ -1221,15 +1324,33 @@ app.get('/cache/:prompt(*)', (0, rateLimit_1.rateLimiter)({ windowMs: 60000, max
         memoryCache.set(key, entry);
     }
     const latency = Date.now() - startTime;
-    analytics_1.analytics.recordRequest(true, latency, entry.model);
-    res.json({
+    analytics_1.analytics.recordRequest(true, latency, entry.model, false, apiKey);
+    (0, analyticsRouter_1.recordAnalytics)(apiKey, true, latency, entry.model);
+    // Apply template/format if requested
+    const templateId = req.query.template;
+    const transform = {
+        uppercase: req.query.uppercase === 'true',
+        lowercase: req.query.lowercase === 'true',
+        trim: req.query.trim !== 'false', // default true
+        escape: req.query.escape === 'true',
+    };
+    let response = entry.response;
+    if (templateId || transform.uppercase || transform.lowercase || transform.escape) {
+        response = (0, templates_1.transformResponse)(entry.response, { ...transform, template: templateId });
+    }
+    const result = {
         cached: true,
-        response: entry.response,
+        response,
         model: entry.model,
         hits: entry.hits,
         age: Date.now() - entry.createdAt,
         backend: getBackend()
-    });
+    };
+    if (templateId) {
+        result.template = templateId;
+        result.formatted = true;
+    }
+    res.json(result);
 });
 // ===== Request Deduplication Endpoints =====
 // Check if a request is in-flight (for polling/waiting)
@@ -1635,7 +1756,80 @@ setInterval(async () => {
         console.log(`🧹 Cleaned ${cleaned} expired entries`);
     }
 }, CLEANUP_INTERVAL);
-// Stripe webhook
+// ===== Webhook Configuration =====
+app.post('/webhooks', async (req, res) => {
+    const { url } = req.body;
+    if (!url || typeof url !== 'string') {
+        return res.status(400).json({ error: 'url required' });
+    }
+    try {
+        new URL(url);
+    }
+    catch {
+        return res.status(400).json({ error: 'Invalid URL format' });
+    }
+    webhooks_1.webhookNotifier.setWebhook(url);
+    res.json({ success: true, url, message: 'Webhook URL configured' });
+});
+app.get('/webhooks', (req, res) => {
+    const stats = webhooks_1.webhookNotifier.getStats();
+    const recent = webhooks_1.webhookNotifier.getEvents(10);
+    res.json({
+        configured: webhooks_1.webhookNotifier.getWebhook() !== null,
+        url: webhooks_1.webhookNotifier.getWebhook(),
+        stats,
+        recentEvents: recent.map(e => ({ type: e.type, timestamp: e.timestamp, data: e.data })),
+    });
+});
+app.delete('/webhooks', (req, res) => {
+    webhooks_1.webhookNotifier.clearWebhook();
+    res.json({ success: true, message: 'Webhook cleared' });
+});
+app.post('/webhooks/test', async (req, res) => {
+    const result = await webhooks_1.webhookNotifier.notifyCacheHit({
+        test: true,
+        message: 'Test event from PromptCache',
+        timestamp: Date.now(),
+    });
+    res.json({ success: result.success, error: result.error });
+});
+// ===== Enhanced Health & Monitoring =====
+app.get('/health/detailed', async (req, res) => {
+    const memSize = memoryCache.size;
+    let redisSize = 0;
+    let pgSize = 0;
+    if (useRedis && redis) {
+        try {
+            redisSize = await redis.dbsize();
+        }
+        catch { }
+    }
+    if ((0, pgCache_1.isPgAvailable)()) {
+        try {
+            const pg = await (0, pgCache_1.pgStats)();
+            pgSize = pg.entries;
+        }
+        catch { }
+    }
+    const summary = healthMonitor_1.healthMonitor.getSummary();
+    res.json({
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        uptime: summary.uptime,
+        cache: {
+            backend: getBackend(),
+            pgEntries: pgSize,
+            redisEntries: redisSize,
+            memoryEntries: memSize,
+        },
+        recent: summary.recent,
+        history: summary.history,
+        webhook: {
+            configured: webhooks_1.webhookNotifier.getWebhook() !== null,
+        },
+    });
+});
+// ===== Stripe webhook
 app.post('/webhook/stripe', express_1.default.raw({ type: 'application/json' }), async (req, res) => {
     const signature = req.headers['stripe-signature'];
     try {
@@ -1654,6 +1848,233 @@ app.post('/webhook/stripe', express_1.default.raw({ type: 'application/json' }),
         res.status(400).json({ error: error.message });
     }
 });
+// ═══════════════════════════════════════════════════════════════
+// CONTEXT OPTIMIZATION ENDPOINTS
+// Based on: https://github.com/muratcankoylan/agent-skills-for-context-engineering
+// Stacks with PromptCache: PromptCache caches WHAT, Context Opt reduces HOW MUCH
+// ═══════════════════════════════════════════════════════════════
+// ─── Token Estimation & Context Stats ────────────────────────────────────────
+app.post('/context/estimate', apiKeyAuth_1.optionalApiKeyAuth, async (req, res) => {
+    const { texts } = req.body;
+    if (!Array.isArray(texts)) {
+        return res.status(400).json({ error: 'texts array required' });
+    }
+    const tokens = texts.map((t) => (0, contextOptimization_1.estimateTokens)(String(t)));
+    const total = tokens.reduce((a, b) => a + b, 0);
+    const utilization = (0, contextOptimization_1.estimateContextUtilization)(texts);
+    const contextLimit = 128000; // Standard context window
+    res.json({
+        tokensPerText: tokens,
+        totalTokens: total,
+        utilizationPercent: Math.round(utilization * 100),
+        contextLimit,
+        compactTriggered: (0, contextOptimization_1.shouldCompact)(total, contextLimit),
+        partitionRecommended: (0, contextOptimization_1.shouldPartition)(total, contextLimit, 3),
+        strategies: [
+            { name: "KV-cache ordering", applicable: true, hitRateBoost: "70%+ on stable prompts" },
+            { name: "Observation masking", applicable: utilization > 0.5, reduction: "60-80% on masked obs" },
+            { name: "Compaction", applicable: utilization > 0.7, reduction: "50-70%" },
+            { name: "Partitioning", applicable: utilization > 0.6, overhead: "~500 tokens" },
+        ],
+    });
+});
+// ─── KV-Cache Optimization ───────────────────────────────────────────────────
+app.post('/context/kvcache-order', apiKeyAuth_1.optionalApiKeyAuth, async (req, res) => {
+    const { system, tools, templates, history, query } = req.body;
+    if (!query) {
+        return res.status(400).json({ error: 'query is required' });
+    }
+    const ordered = (0, contextOptimization_1.orderForKVCaching)({ system: system || "", tools: tools || "", templates: templates || "", history: history || "", query });
+    const originalTokens = (0, contextOptimization_1.estimateTokens)([system, tools, templates, history, query].filter(Boolean).join("\n"));
+    const orderedTokens = (0, contextOptimization_1.estimateTokens)(ordered);
+    res.json({
+        ordered,
+        originalTokens,
+        orderedTokens,
+        cacheStabilityNote: "Stable content (system, tools) now in prefix for maximum KV-cache hit rate",
+        rule: "System (no timestamps) → Tools → Templates → History → Query (always last)",
+    });
+});
+// ─── Observation Masking ─────────────────────────────────────────────────────
+app.post('/context/mask', apiKeyAuth_1.optionalApiKeyAuth, async (req, res) => {
+    const { content, summary } = req.body;
+    if (!content) {
+        return res.status(400).json({ error: 'content required' });
+    }
+    const autoSummary = summary || extractKeyFromContent(content);
+    const masked = (0, contextOptimization_1.maskObservation)(content, autoSummary);
+    res.json({
+        original: content.slice(0, 200) + (content.length > 200 ? "..." : ""),
+        originalLength: content.length,
+        maskedReference: `[Obs:${masked.refId} elided. Key: ${masked.summary}. Full content retrievable.]`,
+        maskedLength: masked.maskedLength,
+        reductionPercent: masked.reduction,
+        refId: masked.refId,
+        note: "Store refId in context. Retrieve with GET /context/observe/:refId",
+    });
+});
+app.get('/context/observe/:refId', apiKeyAuth_1.optionalApiKeyAuth, async (req, res) => {
+    const { refId } = req.params;
+    const content = maskObservationRetrieval(refId);
+    if (!content) {
+        return res.status(404).json({ error: 'Observation not found or expired' });
+    }
+    res.json({ refId, content, retrieved: true });
+});
+app.post('/context/auto-mask', apiKeyAuth_1.optionalApiKeyAuth, async (req, res) => {
+    const { outputs } = req.body;
+    if (!Array.isArray(outputs)) {
+        return res.status(400).json({ error: 'outputs array required' });
+    }
+    const results = (0, contextOptimization_1.autoMaskToolOutputs)(outputs, 3, 500);
+    res.json({
+        total: results.length,
+        masked: results.filter((r) => r.masked).length,
+        results: results.map((r) => ({
+            masked: r.masked,
+            preview: r.content?.slice(0, 150) + (r.content && r.content.length > 150 ? "..." : ""),
+            ref: r.ref ? { refId: r.ref.refId, reductionPercent: r.ref.reduction } : null,
+        })),
+    });
+});
+// ─── Compaction ──────────────────────────────────────────────────────────────
+app.post('/context/compact', apiKeyAuth_1.optionalApiKeyAuth, async (req, res) => {
+    const { messages, triggerOnly } = req.body;
+    if (!Array.isArray(messages)) {
+        return res.status(400).json({ error: 'messages array required' });
+    }
+    const contextLimit = 128000;
+    const totalTokens = messages.reduce((sum, m) => sum + (0, contextOptimization_1.estimateTokens)(String(m.content || "")), 0);
+    const utilization = totalTokens / contextLimit;
+    if (triggerOnly) {
+        return res.json({
+            totalTokens,
+            utilizationPercent: Math.round(utilization * 100),
+            compactTriggered: (0, contextOptimization_1.shouldCompact)(totalTokens, contextLimit),
+            threshold: "70%",
+            message: (0, contextOptimization_1.shouldCompact)(totalTokens, contextLimit)
+                ? "Compaction recommended — context utilization above 70%"
+                : "Context utilization within acceptable range",
+        });
+    }
+    // Perform compaction using local summarization
+    const summary = await summarizeMessages(messages);
+    const compactedTokens = (0, contextOptimization_1.estimateTokens)(summary);
+    const report = (0, contextOptimization_1.generateOptimizationReport)(totalTokens, compactedTokens, ["compaction"]);
+    res.json({
+        originalTokens: totalTokens,
+        compactedTokens,
+        reductionPercent: report.reductions[0],
+        summary,
+        report,
+        strategies: {
+            "1_KV_cache_order": "reorder prompts so system/tools are in prefix",
+            "2_observation_masking": "compress old verbose tool outputs",
+            "3_compaction": "summarize accumulated context",
+            "4_partitioning": "split across sub-agents if >60% load",
+        },
+        priorityOrder: "Apply in order: KV-cache first (zero risk), then masking, then compaction",
+    });
+});
+// ─── Partitioning ────────────────────────────────────────────────────────────
+app.post('/context/partition', apiKeyAuth_1.optionalApiKeyAuth, async (req, res) => {
+    const { content, partitionCount } = req.body;
+    if (!content) {
+        return res.status(400).json({ error: 'content required' });
+    }
+    const count = Math.max(2, Math.min(10, partitionCount || 3));
+    const totalTokens = (0, contextOptimization_1.estimateTokens)(content);
+    const contextLimit = 128000;
+    if (!(0, contextOptimization_1.shouldPartition)(totalTokens, contextLimit, count)) {
+        return res.json({
+            recommended: false,
+            reason: totalTokens / contextLimit <= 0.6
+                ? "Context utilization below 60% — partitioning overhead not justified"
+                : `Need 3+ subtasks for partitioning to pay off (got ${count})`,
+            totalTokens,
+            utilizationPercent: Math.round((totalTokens / contextLimit) * 100),
+        });
+    }
+    const result = (0, contextOptimization_1.partitionContext)(content, count);
+    res.json({
+        recommended: true,
+        partitions: result.partitions,
+        totalTokens: result.totalTokens,
+        coordinatorOverhead: result.coordinatorOverhead,
+        netSavings: result.netSavings,
+        tip: "Run each partition in a sub-agent with clean context, aggregate results in coordinator",
+    });
+});
+// ─── Optimization Report ─────────────────────────────────────────────────────
+app.get('/context/report', apiKeyAuth_1.optionalApiKeyAuth, async (req, res) => {
+    const { beforeTokens, afterTokens, strategies } = req.query;
+    const before = parseInt(beforeTokens) || 0;
+    const after = parseInt(afterTokens) || 0;
+    const stratList = strategies ? String(strategies).split(",") : ["KV-cache", "masking", "compaction"];
+    if (!beforeTokens || !afterTokens) {
+        // Return the optimization guide
+        return res.json({
+            guide: "Context Optimization — stacks with PromptCache",
+            promptCache: "Caches WHAT is said (responses)",
+            contextOpt: "Reduces HOW MUCH is said (tokens)",
+            strategies: [
+                { name: "KV-Cache Ordering", risk: "none", gain: "70%+ cache hit rate", implementation: "PUT system/tools first in prompt, query last" },
+                { name: "Observation Masking", risk: "low", gain: "60-80% reduction on masked obs", implementation: "POST /context/mask with content + summary" },
+                { name: "Compaction", risk: "medium", gain: "50-70% reduction", implementation: "POST /context/compact with messages array" },
+                { name: "Partitioning", risk: "medium", gain: "varies by task", implementation: "POST /context/partition with content + count" },
+            ],
+            quickStart: {
+                estimate: "POST /context/estimate with {texts: [...]}",
+                kvOptimize: "POST /context/kvcache-order with {system, tools, history, query}",
+                mask: "POST /context/mask with {content, summary}",
+                compact: "POST /context/compact with {messages: [...]}",
+                partition: "POST /context/partition with {content, count}",
+            },
+        });
+    }
+    const report = (0, contextOptimization_1.generateOptimizationReport)(before, after, stratList);
+    res.json({ report });
+});
+// ─── Helper functions ────────────────────────────────────────────────────────
+function extractKeyFromContent(content) {
+    const firstPart = content.split(/[.!?]/).slice(0, 2).join(".").trim();
+    const metrics = content.match(/\d+(?:\.\d+)?(?:%|ms|GB|MB|KB| tokens)?/g);
+    const metricStr = metrics ? ` Metrics: ${metrics.slice(0, 5).join(", ")}` : "";
+    return (firstPart + metricStr).slice(0, 200);
+}
+function maskObservationRetrieval(refId) {
+    // Simple in-memory lookup for masked observations
+    const storeKey = `ctx_opt_obs_${refId}`;
+    const cached = memoryCache.get(storeKey);
+    return cached ? cached.response : null;
+}
+async function summarizeMessages(messages) {
+    // Lightweight local summarization using extraction
+    const decisions = [];
+    const facts = [];
+    for (const msg of messages) {
+        const lower = msg.content.toLowerCase();
+        // Extract decisions
+        if (/decided|chose|agreed|concluded|selected|final/i.test(lower)) {
+            decisions.push(msg.content.slice(0, 150));
+        }
+        // Extract numeric facts
+        const numbers = msg.content.match(/\d+(?:\.\d+)?\s*(?:%|ms|GB|MB|KB|hours?|days?|users?|requests?)?/gi);
+        if (numbers && numbers.length > 0) {
+            facts.push(numbers.slice(0, 3).join(", "));
+        }
+    }
+    const summary = [
+        decisions.length > 0 ? `DECISIONS:\n${decisions.slice(0, 5).map((d, i) => `${i + 1}. ${d}`).join("\n")}` : null,
+        facts.length > 0 ? `KEY METRICS:\n${[...new Set(facts)].slice(0, 10).join("\n")}` : null,
+        `[Context compacted from ${messages.length} messages]`,
+    ].filter(Boolean).join("\n\n");
+    return summary || "[No extractable content — context was mostly filler]";
+}
+// ═══════════════════════════════════════════════════════════════
+// ─── Analytics API Router ─────────────────────────────────────────────────────
+app.use('/api/analytics', (0, analyticsRouter_1.createAnalyticsRouter)(apiKeys_1.getAPIKeyTier));
+// ─── Startup ─────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
     console.log(`🚀 PromptCache running on port ${PORT}`);
 });

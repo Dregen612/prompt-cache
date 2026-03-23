@@ -18,6 +18,7 @@ export declare function validateAPIKey(key: string): {
 export declare function recordRequest(key: string): void;
 export declare function getAllAPIKeys(): APIKey[];
 export declare function getAPIKey(key: string): APIKey | undefined;
+export declare function getAPIKeyTier(key: string): 'free' | 'pro' | 'enterprise' | undefined;
 export declare function revokeAPIKey(key: string): boolean;
 export declare function resetDailyLimits(): void;
 //# sourceMappingURL=apiKeys.d.ts.map

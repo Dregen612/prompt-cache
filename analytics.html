@@ -3,10 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PromptCache Analytics</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <title>PromptCache — Savings Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     :root {
       --bg-primary: #030712;
@@ -14,470 +12,888 @@
       --bg-card: #1e293b;
       --accent-primary: #6366f1;
       --accent-secondary: #8b5cf6;
-      --accent-tertiary: #06b6d4;
       --accent-emerald: #10b981;
-      --accent-amber: #f59e0b;
       --accent-rose: #f43f5e;
+      --accent-amber: #f59e0b;
+      --accent-cyan: #06b6d4;
       --text-primary: #f8fafc;
       --text-secondary: #94a3b8;
       --text-muted: #64748b;
-      --border-color: rgba(148, 163, 184, 0.1);
-      --glow-primary: rgba(99, 102, 241, 0.4);
-      --glow-secondary: rgba(139, 92, 246, 0.3);
+      --border: rgba(148, 163, 184, 0.1);
+      --glow: rgba(99, 102, 241, 0.3);
     }
-    
+
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    
+
     body {
       font-family: 'Outfit', sans-serif;
       background: var(--bg-primary);
       color: var(--text-primary);
       min-height: 100vh;
+      background-image:
+        radial-gradient(ellipse at 10% 20%, rgba(99, 102, 241, 0.12) 0%, transparent 50%),
+        radial-gradient(ellipse at 90% 80%, rgba(139, 92, 246, 0.08) 0%, transparent 50%);
     }
-    
-    /* Animated background */
-    .bg-animated {
-      background: 
-        radial-gradient(ellipse at 20% 20%, rgba(99, 102, 241, 0.15) 0%, transparent 50%),
-        radial-gradient(ellipse at 80% 80%, rgba(139, 92, 246, 0.1) 0%, transparent 50%),
-        radial-gradient(ellipse at 50% 50%, rgba(6, 182, 212, 0.05) 0%, transparent 70%),
-        var(--bg-primary);
-    }
-    
-    /* Glass card */
-    .glass-card {
-      background: linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.6) 100%);
+
+    /* ── Header ── */
+    .header {
+      border-bottom: 1px solid var(--border);
+      background: rgba(3, 7, 18, 0.8);
       backdrop-filter: blur(20px);
-      border: 1px solid var(--border-color);
-      border-radius: 16px;
-      transition: all 0.3s ease;
+      position: sticky;
+      top: 0;
+      z-index: 100;
     }
-    
-    .glass-card:hover {
-      border-color: rgba(99, 102, 241, 0.3);
-      box-shadow: 0 0 40px rgba(99, 102, 241, 0.1);
-      transform: translateY(-2px);
+
+    .header-inner {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 24px;
+      height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
     }
-    
-    /* Glowing stat */
-    .stat-glow {
-      position: relative;
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
     }
-    
-    .stat-glow::before {
-      content: '';
-      position: absolute;
-      inset: -1px;
-      border-radius: 17px;
-      padding: 1px;
-      background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary), var(--accent-tertiary));
-      -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-      mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-      -webkit-mask-composite: xor;
-      mask-composite: exclude;
-      opacity: 0;
-      transition: opacity 0.3s;
-    }
-    
-    .stat-glow:hover::before {
-      opacity: 1;
-    }
-    
-    /* Animated number */
-    .animate-number {
-      font-variant-numeric: tabular-nums;
-      transition: all 0.5s ease-out;
-    }
-    
-    /* Pulse dot */
-    .pulse-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      animation: pulse-ring 2s infinite;
-    }
-    
-    @keyframes pulse-ring {
-      0% { box-shadow: 0 0 0 0 currentColor; }
-      70% { box-shadow: 0 0 0 10px transparent; }
-      100% { box-shadow: 0 0 0 0 transparent; }
-    }
-    
-    /* Chart container */
-    .chart-container {
-      position: relative;
-      height: 200px;
-    }
-    
-    /* Gradient text */
-    .text-gradient {
-      background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-    }
-    
-    /* Button */
-    .btn-premium {
-      background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
-      border: none;
+
+    .logo-icon {
+      width: 36px;
+      height: 36px;
       border-radius: 10px;
-      padding: 12px 24px;
-      color: white;
+      background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      box-shadow: 0 0 20px var(--glow);
+    }
+
+    .logo-text {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .logo-text span {
+      color: var(--accent-primary);
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 8px;
+    }
+
+    .nav-links a {
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 14px;
       font-weight: 500;
+      color: var(--text-secondary);
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+
+    .nav-links a:hover {
+      color: var(--text-primary);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .nav-links a.active {
+      color: var(--text-primary);
+      background: rgba(99, 102, 241, 0.15);
+    }
+
+    /* ── Layout ── */
+    .page {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 32px 24px 64px;
+    }
+
+    .page-title {
+      font-size: 28px;
+      font-weight: 800;
+      margin-bottom: 4px;
+    }
+
+    .page-subtitle {
+      color: var(--text-secondary);
+      font-size: 14px;
+      margin-bottom: 32px;
+    }
+
+    /* ── Tier Banner ── */
+    .tier-banner {
+      border-radius: 12px;
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 28px;
+      border: 1px solid;
+    }
+
+    .tier-banner.free {
+      background: rgba(100, 116, 139, 0.1);
+      border-color: rgba(100, 116, 139, 0.3);
+    }
+
+    .tier-banner.paid {
+      background: rgba(99, 102, 241, 0.1);
+      border-color: rgba(99, 102, 241, 0.3);
+    }
+
+    .tier-banner-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .tier-badge {
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .tier-badge.free { background: rgba(100, 116, 139, 0.3); color: #94a3b8; }
+    .tier-badge.starter { background: rgba(6, 182, 212, 0.2); color: #22d3ee; }
+    .tier-badge.pro { background: rgba(99, 102, 241, 0.3); color: #818cf8; }
+
+    .tier-banner-text {
+      font-size: 14px;
+      color: var(--text-secondary);
+    }
+
+    .tier-banner-text strong {
+      color: var(--text-primary);
+    }
+
+    .upgrade-btn {
+      padding: 8px 20px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+      color: white;
+      font-size: 13px;
+      font-weight: 600;
+      border: none;
       cursor: pointer;
-      transition: all 0.3s;
+      text-decoration: none;
+      transition: all 0.2s;
+      box-shadow: 0 0 20px rgba(99, 102, 241, 0.3);
+    }
+
+    .upgrade-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 0 30px rgba(99, 102, 241, 0.5);
+    }
+
+    /* ── Hero Card ── */
+    .hero-card {
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(99, 102, 241, 0.1) 50%, rgba(139, 92, 246, 0.05) 100%);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      border-radius: 20px;
+      padding: 40px;
+      margin-bottom: 24px;
       position: relative;
       overflow: hidden;
     }
-    
-    .btn-premium::before {
+
+    .hero-card::before {
       content: '';
       position: absolute;
-      inset: 0;
-      background: linear-gradient(135deg, transparent 30%, rgba(255,255,255,0.2) 50%, transparent 70%);
-      transform: translateX(-100%);
-      transition: transform 0.5s;
+      top: -50%;
+      right: -20%;
+      width: 400px;
+      height: 400px;
+      background: radial-gradient(circle, rgba(16, 185, 129, 0.1) 0%, transparent 70%);
+      pointer-events: none;
     }
-    
-    .btn-premium:hover::before {
-      transform: translateX(100%);
+
+    .hero-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent-emerald);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
-    
-    .btn-premium:hover {
-      box-shadow: 0 0 30px var(--glow-primary);
-      transform: translateY(-1px);
+
+    .hero-amount {
+      font-size: 72px;
+      font-weight: 800;
+      color: var(--text-primary);
+      line-height: 1;
+      margin-bottom: 8px;
+      font-family: 'Outfit', sans-serif;
     }
-    
-    /* Status indicator */
-    .status-active {
+
+    .hero-amount .dollar { color: var(--accent-emerald); }
+
+    .hero-sub {
+      font-size: 16px;
+      color: var(--text-secondary);
+      margin-bottom: 24px;
+    }
+
+    .hero-stats {
+      display: flex;
+      gap: 32px;
+    }
+
+    .hero-stat {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .hero-stat-label {
+      font-size: 12px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .hero-stat-value {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .hero-stat-value em {
+      font-style: normal;
       color: var(--accent-emerald);
     }
-    .status-inactive {
+
+    /* ── Stats Grid ── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .stat-card {
+      background: linear-gradient(135deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.7) 100%);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px;
+      transition: all 0.3s;
+    }
+
+    .stat-card:hover {
+      border-color: rgba(99, 102, 241, 0.4);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+    }
+
+    .stat-card-label {
+      font-size: 12px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 8px;
+      font-weight: 500;
+    }
+
+    .stat-card-value {
+      font-size: 28px;
+      font-weight: 800;
+      line-height: 1;
+      margin-bottom: 6px;
+    }
+
+    .stat-card-sub {
+      font-size: 12px;
       color: var(--text-muted);
     }
-    .status-warning {
-      color: var(--accent-amber);
+
+    .stat-card.emerald .stat-card-value { color: #34d399; }
+    .stat-card.indigo .stat-card-value { color: #818cf8; }
+    .stat-card.cyan .stat-card-value { color: #22d3ee; }
+    .stat-card.amber .stat-card-value { color: #fbbf24; }
+
+    /* ── Grid Layout ── */
+    .content-grid {
+      display: grid;
+      grid-template-columns: 1fr 380px;
+      gap: 20px;
+      margin-bottom: 24px;
     }
-    
-    /* Bar chart */
-    .bar-chart {
+
+    /* ── Cards ── */
+    .card {
+      background: linear-gradient(135deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.7) 100%);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px;
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+
+    .card-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .card-title-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+
+    .card-title-icon.purple { background: rgba(139, 92, 246, 0.2); }
+    .card-title-icon.cyan { background: rgba(6, 182, 212, 0.2); }
+
+    .card-badge {
+      font-size: 11px;
+      padding: 3px 10px;
+      border-radius: 20px;
+      background: rgba(99, 102, 241, 0.2);
+      color: #818cf8;
+      font-weight: 600;
+    }
+
+    /* ── Timeline Bar Chart ── */
+    .timeline-chart {
       display: flex;
       align-items: flex-end;
       gap: 4px;
       height: 120px;
+      padding-bottom: 24px;
+      position: relative;
     }
-    
-    .bar {
+
+    .timeline-chart::after {
+      content: '';
+      position: absolute;
+      bottom: 20px;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: rgba(148, 163, 184, 0.1);
+    }
+
+    .bar-group {
       flex: 1;
-      background: linear-gradient(to top, var(--accent-primary), var(--accent-secondary));
-      border-radius: 4px 4px 0 0;
-      transition: height 0.5s ease-out;
-      min-height: 4px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      height: 100%;
+      justify-content: flex-end;
     }
-    
-    /* Scrollbar */
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: var(--bg-secondary); }
-    ::-webkit-scrollbar-thumb { background: var(--bg-card); border-radius: 3px; }
-    ::-webkit-scrollbar-thumb:hover { background: var(--accent-primary); }
+
+    .bar-wrap {
+      flex: 1;
+      width: 100%;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+    }
+
+    .bar {
+      width: 100%;
+      max-width: 20px;
+      border-radius: 3px 3px 0 0;
+      background: linear-gradient(to top, var(--accent-primary), var(--accent-secondary));
+      min-height: 2px;
+      transition: height 0.6s ease-out, opacity 0.2s;
+      cursor: pointer;
+      position: relative;
+    }
+
+    .bar:hover {
+      opacity: 0.85;
+    }
+
+    .bar-tooltip {
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 11px;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.15s;
+      z-index: 10;
+    }
+
+    .bar:hover .bar-tooltip {
+      opacity: 1;
+    }
+
+    .bar-label {
+      font-size: 9px;
+      color: var(--text-muted);
+      text-align: center;
+      margin-top: 4px;
+    }
+
+    /* ── Model Table ── */
+    .model-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .model-table th {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding: 0 8px 12px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .model-table th:last-child,
+    .model-table td:last-child {
+      text-align: right;
+    }
+
+    .model-table td {
+      padding: 12px 8px;
+      font-size: 14px;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.06);
+    }
+
+    .model-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    .model-table tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .model-name {
+      font-weight: 600;
+      color: var(--text-primary);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+    }
+
+    .model-requests {
+      color: var(--text-secondary);
+      font-size: 13px;
+    }
+
+    .hit-rate-bar-wrap {
+      width: 80px;
+      height: 6px;
+      background: rgba(148, 163, 184, 0.15);
+      border-radius: 3px;
+      overflow: hidden;
+      display: inline-block;
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+
+    .hit-rate-bar {
+      height: 100%;
+      border-radius: 3px;
+      background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));
+      transition: width 0.6s ease-out;
+    }
+
+    .savings-value {
+      font-weight: 700;
+      color: var(--accent-emerald);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+    }
+
+    /* ── Savings pill ── */
+    .savings-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .savings-badge.high { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+    .savings-badge.mid { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
+    .savings-badge.low { background: rgba(148, 163, 184, 0.15); color: #94a3b8; }
+
+    /* ── Loading / Error states ── */
+    .loading-row td { color: var(--text-muted); font-style: italic; }
+    .error-msg { color: var(--accent-rose); font-size: 13px; padding: 8px 0; }
+
+    /* ── Demo overlay ── */
+    .demo-overlay {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid rgba(99, 102, 241, 0.4);
+      border-radius: 12px;
+      padding: 12px 16px;
+      font-size: 13px;
+      color: var(--text-secondary);
+      backdrop-filter: blur(10px);
+      max-width: 280px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+      z-index: 50;
+    }
+
+    .demo-overlay strong { color: var(--accent-primary); }
+
+    /* ── Footer ── */
+    .footer {
+      text-align: center;
+      padding: 24px;
+      font-size: 12px;
+      color: var(--text-muted);
+      border-top: 1px solid var(--border);
+      margin-top: 40px;
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 900px) {
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+      .content-grid { grid-template-columns: 1fr; }
+      .hero-amount { font-size: 52px; }
+      .hero-stats { flex-wrap: wrap; gap: 16px; }
+    }
+
+    @media (max-width: 600px) {
+      .stats-grid { grid-template-columns: 1fr 1fr; }
+      .header-inner { padding: 0 16px; }
+      .page { padding: 24px 16px 48px; }
+      .hero-card { padding: 24px; }
+    }
   </style>
 </head>
-<body class="bg-animated">
-  <div class="max-w-7xl mx-auto px-6 py-8">
-    <!-- Header -->
-    <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-10 gap-4">
-      <div class="flex items-center gap-4">
-        <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-2xl shadow-lg shadow-indigo-500/30">
-          ⚡
-        </div>
-        <div>
-          <h1 class="text-3xl font-bold">PromptCache <span class="text-gradient">Analytics</span></h1>
-          <p class="text-gray-400 flex items-center gap-2">
-            <span class="pulse-dot bg-emerald-500"></span>
-            Live data
-          </p>
-        </div>
-      </div>
-      <button onclick="refresh()" class="btn-premium flex items-center gap-2">
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-        </svg>
-        Refresh
-      </button>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div class="header-inner">
+    <div class="logo">
+      <div class="logo-icon">⚡</div>
+      <div class="logo-text">Prompt<span>Cache</span></div>
     </div>
+    <nav class="nav-links">
+      <a href="/">Home</a>
+      <a href="/dashboard.html">Dashboard</a>
+      <a href="/analytics.html" class="active">Savings</a>
+    </nav>
+  </div>
+</div>
 
-    <!-- Period Selector -->
-    <div class="flex gap-2 mb-8">
-      <button onclick="setPeriod('1h')" class="period-btn px-4 py-2 rounded-lg text-sm font-medium transition" data-period="1h">1H</button>
-      <button onclick="setPeriod('24h')" class="period-btn px-4 py-2 rounded-lg text-sm font-medium transition bg-indigo-600" data-period="24h">24H</button>
-      <button onclick="setPeriod('7d')" class="period-btn px-4 py-2 rounded-lg text-sm font-medium transition" data-period="7d">7D</button>
-      <button onclick="setPeriod('30d')" class="period-btn px-4 py-2 rounded-lg text-sm font-medium transition" data-period="30d">30D</button>
+<!-- Main Content -->
+<div class="page">
+  <h1 class="page-title">Savings Dashboard</h1>
+  <p class="page-subtitle">See how much PromptCache is saving you on LLM costs</p>
+
+  <!-- Tier Banner -->
+  <div id="tierBanner" class="tier-banner free" style="display:none">
+    <div class="tier-banner-left">
+      <span id="tierBadge" class="tier-badge free">FREE</span>
+      <span class="tier-banner-text" id="tierText">
+        You're on the <strong>Free tier</strong> — showing demo data.
+        Upgrade to Pro to see your real savings.
+      </span>
     </div>
+    <a href="#pricing" class="upgrade-btn">Upgrade to Pro →</a>
+  </div>
 
-    <!-- Main Stats Grid -->
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-      <div class="glass-card stat-glow p-5">
-        <p class="text-gray-400 text-sm mb-1">Total Requests</p>
-        <p class="text-3xl font-bold animate-number" id="totalRequests">-</p>
-        <p class="text-xs text-gray-500 mt-1">all time</p>
-      </div>
-      <div class="glass-card stat-glow p-5">
-        <p class="text-gray-400 text-sm mb-1">Cache Hits</p>
-        <p class="text-3xl font-bold animate-number text-emerald-400" id="cacheHits">-</p>
-        <p class="text-xs text-gray-500 mt-1">served from cache</p>
-      </div>
-      <div class="glass-card stat-glow p-5">
-        <p class="text-gray-400 text-sm mb-1">Hit Rate</p>
-        <p class="text-3xl font-bold animate-number text-indigo-400" id="hitRate">-</p>
-        <div class="w-full bg-gray-700 rounded-full h-1.5 mt-2">
-          <div class="bg-gradient-to-r from-indigo-500 to-purple-500 h-1.5 rounded-full" id="hitRateBar" style="width: 0%"></div>
-        </div>
-      </div>
-      <div class="glass-card stat-glow p-5">
-        <p class="text-gray-400 text-sm mb-1">Avg Latency</p>
-        <p class="text-3xl font-bold animate-number text-cyan-400" id="avgLatency">-</p>
-        <p class="text-xs text-gray-500 mt-1">milliseconds</p>
-      </div>
+  <!-- Hero Savings Card -->
+  <div class="hero-card">
+    <div class="hero-label">
+      <span>💰</span> Total Savings (Last 30 Days)
     </div>
-
-    <!-- Secondary Stats -->
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-      <div class="glass-card p-5">
-        <p class="text-gray-400 text-sm mb-1">Tokens Saved</p>
-        <p class="text-2xl font-bold text-amber-400" id="tokensSaved">-</p>
-      </div>
-      <div class="glass-card p-5">
-        <p class="text-gray-400 text-sm mb-1">Cost Saved</p>
-        <p class="text-2xl font-bold text-green-400" id="costSaved">-</p>
-      </div>
-      <div class="glass-card p-5">
-        <p class="text-gray-400 text-sm mb-1">Cache Misses</p>
-        <p class="text-2xl font-bold text-rose-400" id="cacheMisses">-</p>
-      </div>
-      <div class="glass-card p-5">
-        <p class="text-gray-400 text-sm mb-1">Backend</p>
-        <p class="text-2xl font-bold" id="backend">-</p>
-      </div>
+    <div class="hero-amount">
+      <span class="dollar">$</span><span id="heroAmount">—</span>
     </div>
-
-    <!-- Charts Row -->
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-      <!-- Requests Over Time -->
-      <div class="glass-card p-6">
-        <h3 class="text-lg font-semibold mb-4 flex items-center gap-2">
-          <svg class="w-5 h-5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
-          </svg>
-          Requests Over Time
-        </h3>
-        <div class="chart-container">
-          <canvas id="requestsChart"></canvas>
-        </div>
+    <div class="hero-sub" id="heroSub">Loading your savings data...</div>
+    <div class="hero-stats">
+      <div class="hero-stat">
+        <span class="hero-stat-label">Requests</span>
+        <span class="hero-stat-value" id="heroRequests">—</span>
       </div>
-
-      <!-- Top Models -->
-      <div class="glass-card p-6">
-        <h3 class="text-lg font-semibold mb-4 flex items-center gap-2">
-          <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
-          </svg>
-          Top Models
-        </h3>
-        <div id="modelsList" class="space-y-3">
-          <p class="text-gray-400">Loading...</p>
-        </div>
+      <div class="hero-stat">
+        <span class="hero-stat-label">Cache Hit Rate</span>
+        <span class="hero-stat-value" id="heroHitRate">—%</span>
       </div>
-    </div>
-
-    <!-- Backend Status -->
-    <div class="glass-card p-6">
-      <h3 class="text-lg font-semibold mb-4 flex items-center gap-2">
-        <svg class="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>
-        </svg>
-        Infrastructure Status
-      </h3>
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div class="bg-slate-800/50 rounded-lg p-4">
-          <div class="flex items-center gap-2 mb-2">
-            <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
-            <span class="text-sm font-medium">PostgreSQL</span>
-          </div>
-          <p class="text-xs text-gray-400" id="pgStatus">Active</p>
-        </div>
-        <div class="bg-slate-800/50 rounded-lg p-4">
-          <div class="flex items-center gap-2 mb-2">
-            <span class="w-2 h-2 rounded-full" id="redisDot"></span>
-            <span class="text-sm font-medium">Redis</span>
-          </div>
-          <p class="text-xs text-gray-400" id="redisStatus">Inactive</p>
-        </div>
-        <div class="bg-slate-800/50 rounded-lg p-4">
-          <div class="flex items-center gap-2 mb-2">
-            <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
-            <span class="text-sm font-medium">Memory</span>
-          </div>
-          <p class="text-xs text-gray-400">Fallback</p>
-        </div>
-        <div class="bg-slate-800/50 rounded-lg p-4">
-          <div class="flex items-center gap-2 mb-2">
-            <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span class="text-sm font-medium">Vector</span>
-          </div>
-          <p class="text-xs text-gray-400" id="vectorStatus">Ready</p>
-        </div>
+      <div class="hero-stat">
+        <span class="hero-stat-label">Tokens Cached</span>
+        <span class="hero-stat-value" id="heroTokens">—</span>
+      </div>
+      <div class="hero-stat">
+        <span class="hero-stat-label">Cost Without Cache</span>
+        <span class="hero-stat-value" id="heroCostWithout">—</span>
       </div>
     </div>
   </div>
 
-  <script>
-    const API_URL = window.location.port === '3000' ? '' : ':3000';
-    let currentPeriod = '24h';
-    let requestsChart = null;
+  <!-- Stats Row -->
+  <div class="stats-grid">
+    <div class="stat-card emerald">
+      <div class="stat-card-label">Cache Hits</div>
+      <div class="stat-card-value" id="statHits">—</div>
+      <div class="stat-card-sub">responses served instantly</div>
+    </div>
+    <div class="stat-card indigo">
+      <div class="stat-card-label">Cache Misses</div>
+      <div class="stat-card-value" id="statMisses">—</div>
+      <div class="stat-card-sub">fresh LLM calls made</div>
+    </div>
+    <div class="stat-card cyan">
+      <div class="stat-card-label">Avg Latency</div>
+      <div class="stat-card-value" id="statLatency">—<span style="font-size:14px;font-weight:400;color:var(--text-muted)">ms</span></div>
+      <div class="stat-card-sub">per cached request</div>
+    </div>
+    <div class="stat-card amber">
+      <div class="stat-card-label">Savings Rate</div>
+      <div class="stat-card-value" id="statSavingsRate">—%</div>
+      <div class="stat-card-sub">of original cost</div>
+    </div>
+  </div>
 
-    function setPeriod(period) {
-      currentPeriod = period;
-      document.querySelectorAll('.period-btn').forEach(btn => {
-        btn.classList.remove('bg-indigo-600');
-        if (btn.dataset.period === period) {
-          btn.classList.add('bg-indigo-600');
-        }
-      });
-      refresh();
+  <!-- Content Grid -->
+  <div class="content-grid">
+    <!-- Timeline Chart -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">
+          <div class="card-title-icon purple">📊</div>
+          Daily Savings — Last 30 Days
+        </div>
+        <span class="card-badge" id="timelineHint">Hover bars for details</span>
+      </div>
+      <div class="timeline-chart" id="timelineChart">
+        <div style="flex:1;text-align:center;color:var(--text-muted);font-size:13px;padding:40px 0;">
+          Loading timeline data...
+        </div>
+      </div>
+    </div>
+
+    <!-- Model Breakdown -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">
+          <div class="card-title-icon cyan">🤖</div>
+          Model Breakdown
+        </div>
+      </div>
+      <table class="model-table">
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Requests</th>
+            <th>Hit Rate</th>
+            <th>Savings</th>
+          </tr>
+        </thead>
+        <tbody id="modelTableBody">
+          <tr class="loading-row">
+            <td colspan="4" style="text-align:center;padding:24px 0;">Loading model data...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Demo overlay for free tier -->
+<div id="demoOverlay" class="demo-overlay" style="display:none">
+  <strong>Demo data</strong> — This is what your analytics look like on the Free tier.
+  Upgrade to see your real savings with live API data.
+</div>
+
+<script>
+  const API = window.location.port === '3000' ? '' : ':3000';
+  const API_KEY = localStorage.getItem('pc_api_key') || '';
+
+  // ── Helpers ──────────────────────────────────────────────────────────────
+  function fmtNum(n) {
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+    return n;
+  }
+
+  function fmtCost(n) {
+    return '$' + (n < 0.01 ? n.toFixed(4) : n.toFixed(2));
+  }
+
+  function fmtDate(dateStr) {
+    const d = new Date(dateStr + 'T00:00:00');
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  function hitRateClass(rate) {
+    if (rate >= 0.7) return 'high';
+    if (rate >= 0.4) return 'mid';
+    return 'low';
+  }
+
+  // ── Load Summary ──────────────────────────────────────────────────────────
+  async function loadSummary() {
+    const headers = API_KEY ? { 'x-api-key': API_KEY } : {};
+    const res = await fetch(`${API}/api/analytics/summary`, { headers });
+    if (!res.ok) {
+      showError('Failed to load summary');
+      return null;
+    }
+    return res.json();
+  }
+
+  // ── Load Timeline ─────────────────────────────────────────────────────────
+  async function loadTimeline() {
+    const headers = API_KEY ? { 'x-api-key': API_KEY } : {};
+    const res = await fetch(`${API}/api/analytics/timeline`, { headers });
+    if (!res.ok) return null;
+    return res.json();
+  }
+
+  // ── Load Models ────────────────────────────────────────────────────────────
+  async function loadModels() {
+    const headers = API_KEY ? { 'x-api-key': API_KEY } : {};
+    const res = await fetch(`${API}/api/analytics/models`, { headers });
+    if (!res.ok) return null;
+    return res.json();
+  }
+
+  // ── Render Summary ────────────────────────────────────────────────────────
+  function renderSummary(data) {
+    if (!data) return;
+
+    document.getElementById('heroAmount').textContent = fmtCost(data.savings);
+    document.getElementById('heroSub').textContent =
+      `You've saved ${fmtCost(data.savings)} on LLM costs — ${data.savingsPercent}% off your original bill.`;
+
+    document.getElementById('heroRequests').textContent = fmtNum(data.totalRequests);
+    document.getElementById('heroHitRate').textContent = Math.round(data.cacheHitRate * 100) + '%';
+    document.getElementById('heroTokens').textContent = fmtNum(data.totalTokensCached);
+    document.getElementById('heroCostWithout').textContent = fmtCost(data.totalCostOriginal);
+
+    document.getElementById('statHits').textContent = fmtNum(data.cacheHits);
+    const misses = data.totalRequests - data.cacheHits;
+    document.getElementById('statMisses').textContent = fmtNum(misses);
+    document.getElementById('statLatency').innerHTML = (data.avgLatency || 0) + '<span style="font-size:14px;font-weight:400;color:var(--text-muted)">ms</span>';
+    document.getElementById('statSavingsRate').textContent = data.savingsPercent + '%';
+
+    // Tier banner
+    if (data.demo) {
+      document.getElementById('tierBanner').style.display = 'flex';
+      document.getElementById('demoOverlay').style.display = 'block';
+    } else {
+      document.getElementById('tierBanner').style.display = 'none';
+      document.getElementById('demoOverlay').style.display = 'none';
+    }
+  }
+
+  // ── Render Timeline ───────────────────────────────────────────────────────
+  function renderTimeline(data) {
+    const container = document.getElementById('timelineChart');
+    if (!data || !data.days || data.days.length === 0) {
+      container.innerHTML = '<div style="flex:1;text-align:center;color:var(--text-muted);font-size:13px;padding:40px 0;">No data yet</div>';
+      return;
     }
 
-    function animateValue(element, value, prefix = '', suffix = '') {
-      const current = parseInt(element.textContent.replace(/[^0-9]/g, '')) || 0;
-      const duration = 500;
-      const start = performance.now();
-      
-      function update(now) {
-        const elapsed = now - start;
-        const progress = Math.min(elapsed / duration, 1);
-        const eased = 1 - Math.pow(1 - progress, 3);
-        const currentVal = Math.round(current + (value - current) * eased);
-        element.textContent = prefix + currentVal.toLocaleString() + suffix;
-        
-        if (progress < 1) {
-          requestAnimationFrame(update);
-        }
-      }
-      requestAnimationFrame(update);
-    }
+    const days = data.days;
+    const maxSavings = Math.max(...days.map(d => d.savings), 0.01);
 
-    function updateChart(data) {
-      const ctx = document.getElementById('requestsChart').getContext('2d');
-      const hourlyData = data.hourlyRequests || [];
-      const labels = hourlyData.map(h => `${h.hour}:00`);
-      const values = hourlyData.map(h => h.requests);
-      
-      if (requestsChart) {
-        requestsChart.data.labels = labels;
-        requestsChart.data.datasets[0].data = values;
-        requestsChart.update('none');
-      } else {
-        requestsChart = new Chart(ctx, {
-          type: 'bar',
-          data: {
-            labels,
-            datasets: [{
-              label: 'Requests',
-              data: values,
-              backgroundColor: 'rgba(99, 102, 241, 0.6)',
-              borderColor: 'rgb(99, 102, 241)',
-              borderWidth: 1,
-              borderRadius: 4,
-              borderSkipped: false,
-            }]
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-              legend: { display: false }
-            },
-            scales: {
-              x: {
-                grid: { display: false },
-                ticks: { color: '#64748b', font: { size: 10 } }
-              },
-              y: {
-                grid: { color: 'rgba(148, 163, 184, 0.1)' },
-                ticks: { color: '#64748b' }
-              }
-            }
-          }
-        });
-      }
-    }
-
-    async function refresh() {
-      try {
-        const [analyticsRes, statsRes] = await Promise.all([
-          fetch(`${API_URL}/analytics?period=${currentPeriod}`),
-          fetch(`${API_URL}/stats`)
-        ]);
-        
-        const data = await analyticsRes.json();
-        const stats = await statsRes.json();
-        
-        // Update main stats with animation
-        animateValue(document.getElementById('totalRequests'), data.totalRequests);
-        animateValue(document.getElementById('cacheHits'), data.cacheHits);
-        animateValue(document.getElementById('cacheMisses'), data.cacheMisses || 0);
-        animateValue(document.getElementById('avgLatency'), data.avgLatency, '', 'ms');
-        
-        // Hit rate with bar
-        const hitRate = data.hitRate || 0;
-        document.getElementById('hitRate').textContent = `${hitRate}%`;
-        document.getElementById('hitRateBar').style.width = `${hitRate}%`;
-        
-        // Secondary stats
-        animateValue(document.getElementById('tokensSaved'), data.tokensSaved || 0);
-        animateValue(document.getElementById('costSaved'), data.costSaved || 0, '$');
-        
-        // Backend
-        document.getElementById('backend').textContent = stats.backend || 'memory';
-        
-        // Update chart
-        updateChart(data);
-        
-        // Top models
-        const modelsList = document.getElementById('modelsList');
-        const topModels = data.topModels || [];
-        if (topModels.length > 0) {
-          modelsList.innerHTML = topModels.map((m, i) => `
-            <div class="flex items-center gap-3">
-              <span class="text-gray-500 w-4">${i + 1}</span>
-              <div class="flex-1">
-                <div class="flex justify-between mb-1">
-                  <span class="text-sm font-medium">${m.model}</span>
-                  <span class="text-sm text-indigo-400">${m.requests?.toLocaleString()}</span>
-                </div>
-                <div class="w-full bg-gray-700 rounded-full h-1.5">
-                  <div class="bg-gradient-to-r from-indigo-500 to-purple-500 h-1.5 rounded-full" style="width: ${(m.requests / (topModels[0]?.requests || 1)) * 100}%"></div>
-                </div>
+    container.innerHTML = days.map(day => {
+      const heightPct = Math.max((day.savings / maxSavings) * 90, day.requests > 0 ? 4 : 0);
+      const label = fmtDate(day.date);
+      return `
+        <div class="bar-group">
+          <div class="bar-wrap">
+            <div class="bar" style="height:${heightPct}%" title="">
+              <div class="bar-tooltip">
+                <strong>${label}</strong><br>
+                $${day.savings.toFixed(2)} saved<br>
+                ${day.requests} requests
               </div>
             </div>
-          `).join('');
-        } else {
-          modelsList.innerHTML = '<p class="text-gray-400">No data yet</p>';
-        }
-        
-        // Backend status
-        const redisStatus = stats.backend === 'redis';
-        document.getElementById('redisDot').className = `w-2 h-2 rounded-full ${redisStatus ? 'bg-emerald-500' : 'bg-gray-500'}`;
-        document.getElementById('redisStatus').textContent = redisStatus ? 'Active' : 'Inactive';
-        
-      } catch (e) {
-        console.error('Error:', e);
-      }
+          </div>
+          <div class="bar-label">${label.split(' ')[1]}</div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  // ── Render Models ─────────────────────────────────────────────────────────
+  function renderModels(data) {
+    const tbody = document.getElementById('modelTableBody');
+    if (!data || !data.models || data.models.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px 0;color:var(--text-muted)">No model data yet</td></tr>';
+      return;
     }
 
-    // Initial load
-    refresh();
-    setInterval(refresh, 10000);
-  </script>
+    tbody.innerHTML = data.models.map(m => {
+      const rate = m.cacheHitRate || 0;
+      const ratePct = Math.round(rate * 100);
+      const cls = hitRateClass(rate);
+      return `
+        <tr>
+          <td><span class="model-name">${m.model}</span></td>
+          <td><span class="model-requests">${fmtNum(m.requests)}</span></td>
+          <td>
+            <div class="hit-rate-bar-wrap">
+              <div class="hit-rate-bar" style="width:${ratePct}%"></div>
+            </div>
+            <span class="savings-badge ${cls}">${ratePct}%</span>
+          </td>
+          <td><span class="savings-value">${fmtCost(m.savings)}</span></td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  // ── Main Load ────────────────────────────────────────────────────────────
+  async function loadAll() {
+    const [summary, timeline, models] = await Promise.all([
+      loadSummary(),
+      loadTimeline(),
+      loadModels(),
+    ]);
+    renderSummary(summary);
+    renderTimeline(timeline);
+    renderModels(models);
+  }
+
+  // ── Refresh ──────────────────────────────────────────────────────────────
+  function refresh() {
+    loadAll();
+  }
+
+  loadAll();
+  setInterval(refresh, 30000); // refresh every 30s
+</script>
+
 </body>
 </html>

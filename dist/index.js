@@ -175,7 +175,10 @@ app.post('/cache', (0, rateLimit_1.rateLimiter)({ windowMs: 60000, maxRequests: 
     if (!usage.allowed) {
         return res.status(429).json({ error: 'Daily limit exceeded', tier: usage.tier, remaining: 0 });
     }
-    const { prompt, response, model, ttl = 3600000 } = req.body;
+    const { prompt, response, model, ttl: rawTtl } = req.body;
+    const modelKey = model || 'default';
+    const modelCfg = cacheConfig.defaults[modelKey] || cacheConfig.defaults['default'];
+    const ttl = rawTtl !== undefined ? effectiveTtl(modelKey, rawTtl) : modelCfg.ttl;
     if (!prompt || !response) {
         return res.status(400).json({ error: 'prompt and response required' });
     }
@@ -216,7 +219,9 @@ app.post('/cache/stream', async (req, res) => {
     if (!usage.allowed) {
         return res.status(429).json({ error: 'Daily limit exceeded', tier: usage.tier, remaining: 0 });
     }
-    const { prompt, model = 'gpt-4', llmEndpoint, llmKey, ttl = 3600000, template, uppercase, lowercase, trim = true, escape } = req.body;
+    const { prompt, model = 'gpt-4', llmEndpoint, llmKey, ttl: rawTtl, template, uppercase, lowercase, trim = true, escape } = req.body;
+    const modelCfg = cacheConfig.defaults[model] || cacheConfig.defaults['default'];
+    const ttl = rawTtl !== undefined ? effectiveTtl(model, rawTtl) : modelCfg.ttl;
     if (!prompt) {
         return res.status(400).json({ error: 'prompt required' });
     }
@@ -965,6 +970,121 @@ app.put('/cache/refresh', apiKeyAuth_1.optionalApiKeyAuth, async (req, res) => {
         res.status(404).json({ error: 'Cache entry not found' });
     }
 });
+const PRESETS = {
+    balanced: {
+        globalMaxTtl: 4 * 60 * 60 * 1000,
+        evictionPolicy: 'ttl',
+    },
+    aggressive: {
+        globalMaxTtl: 24 * 60 * 60 * 1000,
+        evictionPolicy: 'hits',
+    },
+    conservative: {
+        globalMaxTtl: 60 * 60 * 1000,
+        evictionPolicy: 'ttl',
+    },
+};
+const DEFAULT_MODEL_CONFIG = {
+    ttl: 3600000,
+    maxAge: 86400000,
+    hitBoost: true,
+};
+const cacheConfig = {
+    defaultStrategy: 'balanced',
+    defaults: {
+        'gpt-4': { ttl: 3600000, maxAge: 86400000, hitBoost: true },
+        'gpt-4-turbo': { ttl: 1800000, maxAge: 43200000, hitBoost: true },
+        'gpt-3.5-turbo': { ttl: 7200000, maxAge: 172800000, hitBoost: true },
+        'claude-3': { ttl: 3600000, maxAge: 86400000, hitBoost: true },
+        'claude-3.5': { ttl: 1800000, maxAge: 43200000, hitBoost: true },
+        'default': { ...DEFAULT_MODEL_CONFIG },
+    },
+    globalMaxTtl: PRESETS.balanced.globalMaxTtl,
+    evictionPolicy: 'ttl',
+};
+function applyStrategy(strategy) {
+    const preset = PRESETS[strategy];
+    if (preset.globalMaxTtl)
+        cacheConfig.globalMaxTtl = preset.globalMaxTtl;
+    if (preset.evictionPolicy)
+        cacheConfig.evictionPolicy = preset.evictionPolicy;
+    cacheConfig.defaultStrategy = strategy;
+}
+function effectiveTtl(model, requestedTtl) {
+    const modelCfg = cacheConfig.defaults[model] || cacheConfig.defaults['default'];
+    const maxAllowed = Math.min(requestedTtl, modelCfg.maxAge, cacheConfig.globalMaxTtl);
+    return Math.max(60000, maxAllowed);
+}
+function parseDuration(s) {
+    const match = String(s).match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)$/);
+    if (!match)
+        return null;
+    const value = parseFloat(match[1]);
+    const multipliers = { ms: 1, s: 1000, m: 60000, h: 3600000, d: 86400000 };
+    return value * multipliers[match[2]];
+}
+// GET /cache/config — return current cache configuration
+app.get('/cache/config', apiKeyAuth_1.optionalApiKeyAuth, (_req, res) => {
+    res.json({
+        strategy: cacheConfig.defaultStrategy,
+        globalMaxTtl: cacheConfig.globalMaxTtl,
+        globalMaxTtlLabel: `${Math.round(cacheConfig.globalMaxTtl / 3600000)}h`,
+        evictionPolicy: cacheConfig.evictionPolicy,
+        modelDefaults: Object.fromEntries(Object.entries(cacheConfig.defaults).map(([k, v]) => [
+            k,
+            { ...v, ttlLabel: `${Math.round(v.ttl / 60000)}m`, maxAgeLabel: `${Math.round(v.maxAge / 3600000)}h` },
+        ])),
+        presets: Object.fromEntries(Object.entries(PRESETS).map(([k, v]) => [
+            k,
+            { ...v, globalMaxTtlLabel: v.globalMaxTtl ? `${Math.round(v.globalMaxTtl / 3600000)}h` : null },
+        ])),
+    });
+});
+// POST /cache/config — update cache configuration
+app.post('/cache/config', apiKeyAuth_1.optionalApiKeyAuth, (req, res) => {
+    const { strategy, model, ttl, maxAge, globalMaxTtl, evictionPolicy } = req.body;
+    const changes = [];
+    if (strategy) {
+        if (!PRESETS[strategy]) {
+            return res.status(400).json({ error: `Invalid strategy. Use: ${Object.keys(PRESETS).join(', ')}` });
+        }
+        applyStrategy(strategy);
+        changes.push(`strategy=${strategy}`);
+    }
+    if (globalMaxTtl !== undefined) {
+        const ms = typeof globalMaxTtl === 'number' ? globalMaxTtl : parseDuration(String(globalMaxTtl));
+        if (!ms || ms < 60000) {
+            return res.status(400).json({ error: 'globalMaxTtl must be >= 60000ms (1 minute)' });
+        }
+        cacheConfig.globalMaxTtl = ms;
+        changes.push(`globalMaxTtl=${ms}ms`);
+    }
+    if (evictionPolicy) {
+        if (!['lru', 'ttl', 'hits'].includes(evictionPolicy)) {
+            return res.status(400).json({ error: 'evictionPolicy must be: lru, ttl, or hits' });
+        }
+        cacheConfig.evictionPolicy = evictionPolicy;
+        changes.push(`evictionPolicy=${evictionPolicy}`);
+    }
+    if (model && (ttl !== undefined || maxAge !== undefined)) {
+        if (!cacheConfig.defaults[model]) {
+            cacheConfig.defaults[model] = { ...DEFAULT_MODEL_CONFIG };
+        }
+        if (ttl !== undefined) {
+            cacheConfig.defaults[model].ttl = Math.max(60000, ttl);
+            changes.push(`model.${model}.ttl=${ttl}ms`);
+        }
+        if (maxAge !== undefined) {
+            cacheConfig.defaults[model].maxAge = Math.max(60000, maxAge);
+            changes.push(`model.${model}.maxAge=${maxAge}ms`);
+        }
+    }
+    if (changes.length === 0) {
+        return res.status(400).json({ error: 'No valid config fields provided' });
+    }
+    console.log(`⚙️ Cache config updated: ${changes.join(', ')}`);
+    res.json({ success: true, applied: changes, config: { strategy: cacheConfig.defaultStrategy, globalMaxTtl: cacheConfig.globalMaxTtl, evictionPolicy: cacheConfig.evictionPolicy } });
+});
 // Export all cache entries (for backup/migration) - must be before :prompt(*) route
 app.get('/cache/export', async (req, res) => {
     const format = req.query.format || 'json';
@@ -1547,8 +1667,12 @@ app.get('/usage/:apiKey', apiKeyAuth_1.optionalApiKeyAuth, async (req, res) => {
         }
     });
 });
-// Detailed analytics
+// Detailed analytics (content-negotiated: JSON API vs HTML dashboard)
 app.get('/analytics', async (req, res) => {
+    const accept = req.headers.accept || '';
+    if (accept.includes('text/html')) {
+        return res.sendFile(path_1.default.join(__dirname, '..', 'analytics.html'));
+    }
     const period = req.query.period || '24h';
     const data = analytics_1.analytics.getAnalytics(period);
     res.json(data);
@@ -1733,9 +1857,6 @@ app.get('/', (req, res) => {
 });
 app.get('/dashboard', (req, res) => {
     res.sendFile(path_1.default.join(__dirname, '..', 'dashboard.html'));
-});
-app.get('/analytics', (req, res) => {
-    res.sendFile(path_1.default.join(__dirname, '..', 'analytics.html'));
 });
 // Serve static files
 app.use(express_1.default.static('.'));

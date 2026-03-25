@@ -11,22 +11,22 @@ export interface APIKey {
   createdAt: number;
   lastUsed: number;
   active: boolean;
+  stripeCustomerId?: string;
 }
 
 // In-memory store (would use DB in production)
 const apiKeys: Map<string, APIKey> = new Map();
 
-// Generate new API key
-export function generateAPIKey(name: string, tier: 'free' | 'pro' | 'enterprise' = 'free'): APIKey {
+export function generateAPIKey(name: string, tier: 'free' | 'pro' | 'enterprise' = 'free', stripeCustomerId?: string): APIKey {
   const id = crypto.randomBytes(8).toString('hex');
   const key = `pc_${tier}_sk_${crypto.randomBytes(24).toString('hex')}`;
-  
-  const limits = {
+
+  const limits: Record<string, number> = {
     free: 1000,
     pro: 100000,
-    enterprise: Infinity
+    enterprise: Infinity,
   };
-  
+
   const apiKey: APIKey = {
     id,
     key,
@@ -36,37 +36,33 @@ export function generateAPIKey(name: string, tier: 'free' | 'pro' | 'enterprise'
     requestsLimit: limits[tier],
     createdAt: Date.now(),
     lastUsed: Date.now(),
-    active: true
+    active: true,
+    stripeCustomerId,
   };
-  
+
   apiKeys.set(key, apiKey);
-  
   return apiKey;
 }
 
-// Validate API key
 export function validateAPIKey(key: string): { valid: boolean; apiKey?: APIKey; error?: string } {
   const apiKey = apiKeys.get(key);
-  
+
   if (!apiKey) {
     return { valid: false, error: 'Invalid API key' };
   }
-  
+
   if (!apiKey.active) {
     return { valid: false, error: 'API key is disabled' };
   }
-  
+
   if (apiKey.requestsToday >= apiKey.requestsLimit) {
     return { valid: false, error: 'Rate limit exceeded' };
   }
-  
-  // Update last used
+
   apiKey.lastUsed = Date.now();
-  
   return { valid: true, apiKey };
 }
 
-// Record request
 export function recordRequest(key: string): void {
   const apiKey = apiKeys.get(key);
   if (apiKey) {
@@ -74,23 +70,19 @@ export function recordRequest(key: string): void {
   }
 }
 
-// Get all keys
 export function getAllAPIKeys(): APIKey[] {
   return Array.from(apiKeys.values());
 }
 
-// Get key by key string
 export function getAPIKey(key: string): APIKey | undefined {
   return apiKeys.get(key);
 }
 
-// Get tier for an API key (undefined if not found/invalid)
 export function getAPIKeyTier(key: string): 'free' | 'pro' | 'enterprise' | undefined {
   const apiKey = apiKeys.get(key);
   return apiKey?.tier;
 }
 
-// Revoke key
 export function revokeAPIKey(key: string): boolean {
   const apiKey = apiKeys.get(key);
   if (apiKey) {
@@ -98,6 +90,58 @@ export function revokeAPIKey(key: string): boolean {
     return true;
   }
   return false;
+}
+
+// Upgrade/downgrade an API key's tier (called by Stripe webhook)
+export function updateAPIKeyTier(apiKeyId: string, newTier: 'free' | 'pro' | 'enterprise'): boolean {
+  const limits: Record<string, number> = {
+    free: 1000,
+    pro: 100000,
+    enterprise: Infinity,
+  };
+
+  for (const apiKey of apiKeys.values()) {
+    if (apiKey.id === apiKeyId) {
+      apiKey.tier = newTier;
+      apiKey.requestsLimit = limits[newTier];
+      apiKey.requestsToday = 0; // reset daily count on tier change
+      console.log(`✅ API key "${apiKey.name}" (${apiKeyId}) tier → ${newTier}`);
+      return true;
+    }
+  }
+  return false;
+}
+
+// Find API key by Stripe customer ID (for webhook tier upgrades)
+export function getAPIKeyByCustomer(customerId: string): APIKey | undefined {
+  for (const apiKey of apiKeys.values()) {
+    if (apiKey.stripeCustomerId === customerId) {
+      return apiKey;
+    }
+  }
+  return undefined;
+}
+
+// Link a Stripe customer ID to an API key (called after checkout)
+export function linkAPIKeyToCustomer(apiKeyId: string, customerId: string): boolean {
+  for (const apiKey of apiKeys.values()) {
+    if (apiKey.id === apiKeyId) {
+      apiKey.stripeCustomerId = customerId;
+      return true;
+    }
+  }
+  return false;
+}
+
+// Find API key by email address embedded in key name
+export function findAPIKeyByEmail(email: string): APIKey | undefined {
+  const lower = email.toLowerCase();
+  for (const apiKey of apiKeys.values()) {
+    if (apiKey.name.toLowerCase().includes(lower)) {
+      return apiKey;
+    }
+  }
+  return undefined;
 }
 
 // Reset daily limits (called at midnight)

@@ -1942,12 +1942,12 @@ app.patch('/cache/:prompt(*)', async (req, res) => {
 });
 // Stripe checkout session
 app.post('/checkout', async (req, res) => {
-  const { tier, customerId, email } = req.body;
-  
+  const { tier, customerId, email, apiKeyId } = req.body;
+
   if (!tier || !['pro', 'enterprise'].includes(tier)) {
     return res.status(400).json({ error: 'Invalid tier. Use pro or enterprise.' });
   }
-  
+
   try {
     // Get or create customer
     let custId = customerId;
@@ -1955,15 +1955,16 @@ app.post('/checkout', async (req, res) => {
       const { getOrCreateCustomer } = await import('./services/stripe.js');
       custId = await getOrCreateCustomer(email);
     }
-    
+
     const { createCheckoutSession } = await import('./services/stripe.js');
     const result = await createCheckoutSession(
-      tier, 
+      tier,
       custId,
       `${process.env.FRONTEND_URL || 'http://localhost:3000'}/success?session_id={CHECKOUT_SESSION_ID}`,
-      `${process.env.FRONTEND_URL || 'http://localhost:3000'}/pricing`
+      `${process.env.FRONTEND_URL || 'http://localhost:3000'}/pricing`,
+      apiKeyId
     );
-    
+
     res.json({ url: result.url, sessionId: result.sessionId });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -2177,20 +2178,12 @@ app.get('/health/detailed', async (req, res) => {
 // ===== Stripe webhook
 app.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
   const signature = req.headers['stripe-signature'] as string;
-  
+
   try {
     const { handleWebhook } = await import('./services/stripe.js');
     const result = await handleWebhook(req.body as string, signature);
-    
-    console.log(`📦 Stripe webhook: ${result.type}`);
-    
-    // Handle specific events
-    if (result.type === 'subscription_created') {
-      // TODO: Update API key tier in database
-      console.log(`✅ Subscription created: ${result.data.subscriptionId}`);
-    }
-    
-    res.json({ received: true });
+    // handleWebhook internally updates API key tiers via updateAPIKeyTier()
+    res.json({ received: true, type: result.type });
   } catch (error: any) {
     console.error('Webhook error:', error.message);
     res.status(400).json({ error: error.message });
